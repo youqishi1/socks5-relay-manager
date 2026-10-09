@@ -674,6 +674,9 @@ def menu(manager):
                     print('无效选项，请输入 0–13。')
         except Error as exc:
             print('错误：' + str(exc))
+            if (manager.root / 'pending.json').exists():
+                print('未完成事务已保留。请先修复服务故障，再重新执行 socks-menu；本次不继续自动重试。')
+                return
         except (EOFError, KeyboardInterrupt):
             print('\n已退出。未完成事务将在下次管理操作时回滚。')
             return

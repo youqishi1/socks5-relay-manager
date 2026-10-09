@@ -421,6 +421,25 @@ class RelayTests(unittest.TestCase):
             reader = m.Manager(self.manager.root, self.manager.log, BINARY, readonly=True)
             self.assertEqual(reader.row(row['port']), row)
 
+    def test_20_failed_recovery_retains_journal_without_retry_loop(self):
+        row = self.add()
+        m.write_json(self.manager.root / 'pending.json', {'ports': [str(row['port'])], 'old': self.manager.pointers()})
+        @contextlib.contextmanager
+        def recovery_lock():
+            self.manager.recover()
+            yield
+        output = io.StringIO()
+        with patch.object(self.manager, 'lock', side_effect=recovery_lock), \
+             patch.object(self.backend, 'apply', side_effect=m.Error('模拟永久服务故障')) as failed, \
+             patch('builtins.input', side_effect=AssertionError('menu should exit before prompting')), \
+             contextlib.redirect_stdout(output):
+            m.menu(self.manager)
+        self.assertEqual(failed.call_count, 1)
+        self.assertTrue((self.manager.root / 'pending.json').exists())
+        self.assertIn('本次不继续自动重试', output.getvalue())
+        self.manager.recover()
+        self.assertEqual(self.manager.verify(row)[0], '127.0.0.2')
+
 
 if __name__ == '__main__':
     if not BINARY.is_file():
