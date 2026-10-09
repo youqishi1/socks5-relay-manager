@@ -989,6 +989,12 @@ def main():
         raise Error('管理操作需要 root 权限，请使用 sudo sb1。')
     os.umask(0o077)
     args = sys.argv[1:]
+    if len(args) == 2 and args[0] in ('run', 'access-run') and args[1].isdecimal() and FIRST <= int(args[1]) <= LAST:
+        kind = 'service' if args[0] == 'run' else 'access'
+        fd = os.open(LOG / (kind + '-' + str(int(args[1])) + '.log'),
+                     os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        os.dup2(fd, 2)
+        os.close(fd)
     # systemd's read-only /etc sandbox must never be chmod'ed by the launcher.
     manager = Manager(readonly=args[:1] in (['run'], ['access-run']))
     if args == ['menu']:

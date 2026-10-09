@@ -4,7 +4,7 @@ set -Eeuo pipefail
 trap 'echo "错误：安装步骤失败，请检查上方的软件源、网络或文件权限错误。" >&2' ERR
 umask 077
 REPO='youqishi1/socks5-relay-manager'
-REF="${SOCKS_REPO_REF:-v1.2.2}"
+REF="${SOCKS_REPO_REF:-v1.3.0}"
 CORE_COMMIT='da99424eac4092e3722f1a5b1844cfe80478f580'
 CORE_SHA256='9541e866d9ce04d051b07aa7b7c23bf717c5bc5ef7a9f07963e31a139038faeb'
 CORE_VERSION='0.9.9.0'
@@ -40,11 +40,19 @@ fi
 # shellcheck disable=SC1091
 source /etc/os-release
 case "${ID:-}" in
-    ubuntu|debian) ;;
-    *) echo '错误：当前仅支持 Ubuntu/Debian。' >&2; exit 1 ;;
+    ubuntu|debian) family=deb ;;
+    centos)
+        [[ ${VERSION_ID%%.*} == 7 ]] || { echo '错误：CentOS 目前仅兼容 7。' >&2; exit 1; }
+        family=el7 ;;
+    *) echo '错误：当前支持 Ubuntu/Debian/CentOS 7。' >&2; exit 1 ;;
 esac
 if ! command -v systemctl >/dev/null || [[ ! -d /run/systemd/system ]]; then
-    echo '错误：需要以 systemd 运行的完整 Ubuntu/Debian 主机。' >&2
+    echo '错误：需要以 systemd 运行的完整主机。' >&2
+    exit 1
+fi
+systemd_version=$(systemctl --version | awk 'NR == 1 {print $2}')
+if [[ ! $systemd_version =~ ^[0-9]+$ ]] || (( systemd_version < 219 )); then
+    echo '错误：需要 systemd 219 或更新版本。' >&2
     exit 1
 fi
 arch=$(uname -m)
@@ -62,12 +70,38 @@ if [[ ! $REF =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ || $REF == *..* ]]; then
 fi
 echo "系统：$ID ${VERSION_ID:-未知}，架构：$arch"
 case "$ID:${VERSION_ID:-}" in
-    ubuntu:22.04|ubuntu:24.04|debian:12|debian:13) ;;
+    ubuntu:22.04|ubuntu:24.04|debian:12|debian:13|centos:7|centos:7.*) ;;
     *) echo '提示：此发行版不在主要支持范围，仍会检查依赖和启动结果。' ;;
 esac
-export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y --no-install-recommends ca-certificates curl python3 iproute2 logrotate util-linux tar gzip openssl
+if [[ $family == deb ]]; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates curl python3 iproute2 logrotate util-linux tar gzip openssl
+else
+    [[ $arch == x86_64 ]] || { echo '错误：CentOS 7 兼容版仅验证 x86_64。' >&2; exit 1; }
+    echo 'CentOS 7 兼容模式：使用官方归档及 RPM 签名校验；该系统已停止安全更新。'
+    install -d -m 700 "$APP" "$APP/yum-repos"
+    for repo in os updates extras; do
+        cat >"$APP/yum-repos/relay-$repo.repo" <<EOF
+[relay-$repo]
+name=CentOS 7.9.2009 official archive $repo
+baseurl=https://vault.centos.org/7.9.2009/$repo/\$basearch/
+enabled=1
+gpgcheck=1
+sslverify=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+EOF
+    done
+    yum_args=(--setopt="reposdir=$APP/yum-repos" --disablerepo='*' --enablerepo='relay-*')
+    missing_packages=()
+    for package in ca-certificates curl iproute logrotate util-linux tar gzip openssl \
+        gcc make perl-core zlib-devel bzip2-devel xz-devel libffi-devel readline-devel sqlite-devel; do
+        rpm -q "$package" >/dev/null 2>&1 || missing_packages+=("$package")
+    done
+    if (( ${#missing_packages[@]} )); then
+        yum "${yum_args[@]}" install -y "${missing_packages[@]}"
+    fi
+fi
 install -d -m 700 "$APP" "$APP/releases" "$STATE" "$LOG"
 exec 9>"$STATE/manager.lock"
 chmod 600 "$STATE/manager.lock"
@@ -108,7 +142,9 @@ cleanup() {
             fi
             systemctl daemon-reload || true
             if [[ -n $old_release ]]; then
-                python3 - "$APP/current/scripts" <<'PY' || true
+                rollback_python="$APP/python3"
+                [[ -x $rollback_python ]] || rollback_python="$python"
+                "$rollback_python" - "$APP/current/scripts" <<'PY' || true
 import sys
 sys.path.insert(0, sys.argv[1])
 from manager import Manager
@@ -129,6 +165,42 @@ PY
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+python=$(command -v python3 || true)
+if [[ -z $python ]] || ! "$python" -c 'import sys,ssl; assert sys.version_info >= (3,10)' 2>/dev/null; then
+    if [[ $family != el7 ]]; then
+        echo '错误：需要 Python 3.10 或更新版本以及 SSL 支持。' >&2
+        exit 1
+    fi
+    runtime="$APP/runtime-py3.12.15-ssl3.5.9"
+    python="$runtime/python/bin/python3.12"
+    if [[ ! -f $runtime/ready ]] || ! "$python" -c 'import sys,ssl; assert sys.version_info[:3] == (3,12,15)' 2>/dev/null; then
+        echo '正在编译项目独立 Python 3.12.15 / OpenSSL 3.5.9，首次安装需要数分钟，请等待；不会替换系统 Python/OpenSSL。'
+        curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 10 --max-time 300 \
+            https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz -o "$stage/openssl.tar.gz"
+        echo "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a  $stage/openssl.tar.gz" | sha256sum -c -
+        curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 10 --max-time 300 \
+            https://www.python.org/ftp/python/3.12.15/Python-3.12.15.tgz -o "$stage/python.tar.gz"
+        echo "de1a241a519e0a3374fea98988d0b52c886743f9d953f23be8269cc7b59c5fab  $stage/python.tar.gz" | sha256sum -c -
+        mkdir "$stage/openssl" "$stage/python"
+        tar -xzf "$stage/openssl.tar.gz" --strip-components=1 -C "$stage/openssl"
+        tar -xzf "$stage/python.tar.gz" --strip-components=1 -C "$stage/python"
+        install -d -m 700 "$runtime"
+        jobs=$(nproc)
+        (( jobs <= 2 )) || jobs=2
+        memory_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+        (( memory_kb >= 1500000 )) || jobs=1
+        (cd "$stage/openssl" && ./Configure linux-x86_64 --prefix="$runtime/ssl" --libdir=lib \
+            --openssldir=/etc/pki/tls shared "-Wl,-rpath,$runtime/ssl/lib" && make -j"$jobs" && make install_sw)
+        (cd "$stage/python" && ./configure --prefix="$runtime/python" --with-openssl="$runtime/ssl" \
+            --with-openssl-rpath=auto --without-ensurepip && make -j"$jobs" && make install)
+        "$python" -c 'import ssl,sys,fcntl,hashlib; assert sys.version_info[:3] == (3,12,15); print(ssl.OPENSSL_VERSION)'
+        "$runtime/ssl/bin/openssl" version
+        chown -R root:root "$runtime"
+        chmod -R go-rwx "$runtime"
+        touch "$runtime/ready"
+    fi
+fi
+"$python" --version
 if (( local_mode )); then
     source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
     mkdir "$stage/source"
@@ -151,10 +223,10 @@ else
     mkdir "$stage/source"
     tar -xzf "$stage/manager.tar.gz" --strip-components=1 -C "$stage/source"
 fi
-python3 - "$stage/source" <<'PY'
+"$python" - "$stage/source" <<'PY'
 import pathlib, py_compile, sys
 p = pathlib.Path(sys.argv[1])
-for name in ('install.sh', 'socks-menu.sh', 'uninstall.sh', 'VERSION', 'scripts/manager.py', 'scripts/access.py', 'scripts/client_config.py', 'systemd/socks-relay@.service', 'systemd/socks-access@.service'):
+for name in ('install.sh', 'socks-menu.sh', 'uninstall.sh', 'VERSION', 'scripts/manager.py', 'scripts/access.py', 'scripts/client_config.py', 'scripts/platform_setup.py', 'systemd/socks-relay@.service', 'systemd/socks-access@.service'):
     if not (p / name).is_file() or (p / name).is_symlink():
         sys.exit('错误：管理程序源码不完整或含有不安全链接。')
 for script in (p / 'scripts').glob('*.py'):
@@ -167,7 +239,7 @@ if [[ -L $APP/current ]]; then
     cp -- "$APP/3proxy" "$stage/old-core"
     [[ ! -f /etc/systemd/system/socks-access@.service ]] || cp -- /etc/systemd/system/socks-access@.service "$stage/old-access-unit"
     [[ ! -f $APP/sing-box ]] || cp -- "$APP/sing-box" "$stage/old-access-core"
-    python3 - "$APP/current/scripts" <<'PY'
+    "$python" - "$APP/current/scripts" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
 from manager import Manager
@@ -213,7 +285,7 @@ else
             package_version=$version
             break
         fi
-    done < <(apt-cache madison 3proxy 2>/dev/null || true)
+    done < <(if [[ $family == deb ]]; then apt-cache madison 3proxy 2>/dev/null || true; fi)
     if [[ -n $package_version ]]; then
         echo '使用发行版签名软件源中的 3proxy；只提取二进制，不运行默认服务。'
         mkdir "$stage/package"
@@ -227,7 +299,9 @@ else
     fi
     if [[ ! -f $stage/3proxy ]]; then
         echo "发行版源无合适核心，构建固定官方 LTS 源码 $CORE_VERSION（SHA-256 校验）。"
-        apt-get install -y --no-install-recommends build-essential
+        if [[ $family == deb ]]; then
+            apt-get install -y --no-install-recommends build-essential
+        fi
         curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 10 --max-time 180 \
             "https://codeload.github.com/3proxy/3proxy/tar.gz/$CORE_COMMIT" -o "$stage/core.tar.gz"
         echo "$CORE_SHA256  $stage/core.tar.gz" | sha256sum -c -
@@ -239,7 +313,7 @@ else
     fi
 fi
 chmod 755 "$stage/3proxy"
-python3 - "$stage/source/scripts" "$stage/3proxy" <<'PY'
+"$python" - "$stage/source/scripts" "$stage/3proxy" <<'PY'
 import sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
@@ -263,6 +337,7 @@ done
 # deliberately has no CAP_DAC_OVERRIDE, so copied 0700 directories must be root-owned.
 chown -R root:root "$release"
 chmod -R go-rwx "$release"
+"$python" "$release/scripts/platform_setup.py" "$release/systemd" "$stage/units" "$python" "$systemd_version"
 switched=1
 install -m 755 "$stage/3proxy" "$APP/3proxy.new"
 mv -f -- "$APP/3proxy.new" "$APP/3proxy"
@@ -270,10 +345,10 @@ install -m 755 "$stage/sing-box" "$APP/sing-box.new"
 mv -f -- "$APP/sing-box.new" "$APP/sing-box"
 ln -s "$release" "$APP/current.new"
 mv -Tf "$APP/current.new" "$APP/current"
-install -m 644 "$release/systemd/socks-relay@.service" /etc/systemd/system/socks-relay@.service
-install -m 644 "$release/systemd/socks-access@.service" /etc/systemd/system/socks-access@.service
+install -m 644 "$stage/units/socks-relay@.service" /etc/systemd/system/socks-relay@.service
+install -m 644 "$stage/units/socks-access@.service" /etc/systemd/system/socks-access@.service
 # Explicitly recreate both standard error/access logs with private permissions.
-python3 - "$APP/current/scripts" <<'PY'
+"$python" - "$APP/current/scripts" <<'PY'
 import sys, os
 sys.path.insert(0, sys.argv[1])
 from manager import Manager, check_config
@@ -287,7 +362,7 @@ for row in m.rows():
         check_config(row, m.binary)
 PY
 systemctl daemon-reload
-python3 - "$APP/current/scripts" <<'PY'
+"$python" - "$APP/current/scripts" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
 from manager import Manager
@@ -299,6 +374,8 @@ PY
 install -m 755 "$release/socks-menu.sh" /usr/local/bin/socks-menu
 install -m 755 "$release/uninstall.sh" /usr/local/bin/socks-relay-uninstall
 install -m 644 "$release/systemd/logrotate" /etc/logrotate.d/socks5-relay-manager
+ln -s "$python" "$APP/python3.new"
+mv -Tf "$APP/python3.new" "$APP/python3"
 printf '%s\n' "$CORE_VERSION" >"$APP/core-version"
 chmod 600 "$APP/core-version"
 printf '%s\n' "$ACCESS_VERSION" >"$APP/access-version"

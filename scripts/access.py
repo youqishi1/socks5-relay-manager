@@ -63,10 +63,14 @@ def generate(rows, inner_port):
         directory = Path(folder)
         directory.chmod(0o700)
         cert, key = directory / 'certificate.pem', directory / 'private-key.pem'
+        config = directory / 'openssl.cnf'
+        config.write_text('[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=extensions\n'
+                          '[dn]\nCN=' + SNI + '\n[extensions]\nsubjectAltName=DNS:' + SNI + '\n'
+                          'basicConstraints=critical,CA:TRUE\n')
         try:
             result = subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '3650',
-                                     '-keyout', str(key), '-out', str(cert), '-subj', '/CN=' + SNI,
-                                     '-addext', 'subjectAltName=DNS:' + SNI], capture_output=True, timeout=30)
+                                     '-keyout', str(key), '-out', str(cert), '-config', str(config)],
+                                    capture_output=True, timeout=30)
         except (OSError, subprocess.TimeoutExpired):
             raise AccessError('证书生成失败，请检查 OpenSSL 依赖。') from None
         if result.returncode:
