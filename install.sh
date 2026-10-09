@@ -221,6 +221,9 @@ mkdir -m 700 "$release"
 for entry in install.sh socks-menu.sh uninstall.sh VERSION scripts systemd; do
     cp -a -- "$stage/source/$entry" "$release/"
 done
+# Local source trees may belong to an unprivileged login account. The service
+# deliberately has no CAP_DAC_OVERRIDE, so copied 0700 directories must be root-owned.
+chown -R root:root "$release"
 chmod -R go-rwx "$release"
 switched=1
 install -m 755 "$stage/3proxy" "$APP/3proxy.new"
