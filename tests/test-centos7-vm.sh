@@ -49,6 +49,15 @@ scp -i "$work/key" -P 22227 -o BatchMode=yes -o StrictHostKeyChecking=accept-new
 ssh "${ssh_args[@]}" root@127.0.0.1 'bash -s' <<'GUEST'
 set -Eeuo pipefail
 umask 077
+diagnostics() {
+    local rc=$?
+    journalctl -u 'socks-relay@*' -u 'socks-access@*' --no-pager -n 80 || true
+    for file in /var/log/socks5-relay-manager/service-*.log /var/log/socks5-relay-manager/access-*.log; do
+        [[ ! -f $file ]] || tail -n 30 "$file"
+    done
+    exit "$rc"
+}
+trap diagnostics ERR
 uname -r
 systemctl --version | head -n 1
 [[ $(uname -r) == 3.10.* ]]

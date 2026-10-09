@@ -52,12 +52,12 @@ try:
         assert manager.verify(row)[0] == '127.0.0.2'
     print('PASS: repeated installation preserves credentials and active revisions', flush=True)
     survivor_unit = manager.backend.unit(rows[1]['port'])
-    survivor_pid = subprocess.check_output(['systemctl', 'show', survivor_unit, '--property=MainPID', '--value'])
-    front_pid = subprocess.check_output(['systemctl', 'show', dual_unit, '--property=MainPID', '--value'])
+    survivor_pid = subprocess.check_output(['systemctl', 'show', survivor_unit, '--property=MainPID'])
+    front_pid = subprocess.check_output(['systemctl', 'show', dual_unit, '--property=MainPID'])
     with manager.lock():
         manager.apply({rows[0]['port']: None})
-    assert subprocess.check_output(['systemctl', 'show', survivor_unit, '--property=MainPID', '--value']) == survivor_pid
-    assert subprocess.check_output(['systemctl', 'show', dual_unit, '--property=MainPID', '--value']) == front_pid
+    assert subprocess.check_output(['systemctl', 'show', survivor_unit, '--property=MainPID']) == survivor_pid
+    assert subprocess.check_output(['systemctl', 'show', dual_unit, '--property=MainPID']) == front_pid
     print('PASS: single deletion preserves other service PID', flush=True)
     with manager.lock():
         bad = copy.deepcopy(rows[1])

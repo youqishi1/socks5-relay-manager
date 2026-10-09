@@ -333,8 +333,8 @@ class Systemd:
 
     def owns_listener(self, port, unit=None, both=False):
         # A different process occupying the port must not satisfy startup checks.
-        pid = subprocess.run(['systemctl', 'show', unit or self.unit(port), '--property=MainPID', '--value'],
-                             capture_output=True, text=True, timeout=5).stdout.strip()
+        pid = subprocess.run(['systemctl', 'show', unit or self.unit(port), '--property=MainPID'],
+                             capture_output=True, text=True, timeout=5).stdout.partition('=')[2].strip()
         sockets = subprocess.run(['ss', '-H', '-lntp', 'sport = :' + str(port)],
                                  capture_output=True, text=True, timeout=5).stdout
         found = pid.isdecimal() and pid != '0' and re.search(r'pid=' + pid + r'[,)]', sockets) is not None
