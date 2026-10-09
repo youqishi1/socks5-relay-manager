@@ -275,6 +275,10 @@ class RelayTests(unittest.TestCase):
     def test_07_occupied_ports_and_service_rollback(self):
         port = self.manager.allocate()
         with socket.socket() as occupied:
+            if os.name == 'posix':
+                # The selected port may have legitimate old TIME_WAIT sockets.
+                # Create a live listener, matching normal Linux server semantics.
+                occupied.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             occupied.bind(('0.0.0.0', port))
             occupied.listen()
             self.assertNotEqual(self.manager.allocate(), port)
