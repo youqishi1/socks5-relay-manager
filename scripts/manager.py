@@ -499,7 +499,7 @@ def number(prompt, default=None):
     return int(value)
 
 
-def new_row(manager, previous=None):
+def new_row(manager, previous=None, local_tuic=False):
     old = previous or {}
     port = old.get('port') or manager.allocate()
     row = {'port': port,
@@ -515,9 +515,13 @@ def new_row(manager, previous=None):
     else:
         row['client_user'] = old.get('client_user', 'client' + str(port - FIRST + 1).zfill(2))
         row['client_password'] = old.get('client_password', secrets.token_urlsafe(24))
-    sources = ask('允许来源 IPv4/CIDR（逗号分隔；* 允许公网，默认仅本机）', ','.join(old.get('sources', ['127.0.0.1'])))
-    row['sources'] = [x.strip() for x in sources.split(',')]
-    row['bind'] = ask('监听 IPv4（可填 WireGuard 地址）', old.get('bind', '0.0.0.0'))
+    if local_tuic:
+        row['sources'], row['bind'] = ['127.0.0.1'], '127.0.0.1'
+        print('TUIC 加速模式：仅监听 VPS 本机，不需要开放 SOCKS5 公网端口。')
+    else:
+        sources = ask('允许来源 IPv4/CIDR（逗号分隔；* 允许公网，默认仅本机）', ','.join(old.get('sources', ['127.0.0.1'])))
+        row['sources'] = [x.strip() for x in sources.split(',')]
+        row['bind'] = ask('监听 IPv4（可填 WireGuard 地址）', old.get('bind', '0.0.0.0'))
     row['enabled'] = True
     validate(row)
     if '*' in row['sources']:
@@ -569,6 +573,41 @@ def show_connection(row):
     print('客户端账号：' + row['client_user'] + '\n客户端密码：' + row['client_password'])
     print('连接格式：\n' + address + ':' + str(row['port']) + ':' + row['client_user'] + ':' + row['client_password'])
     print('========================================\n凭据只在此终端显示，请妥善保存。')
+    if row['bind'] == '127.0.0.1':
+        print('这是 VPS 本机入口。选择菜单 14 导出 TUIC 客户端配置后，再连接电脑本机的对应端口。')
+
+
+def export_tuic(manager):
+    from client_config import ConfigError, export_configs, parse_tuic
+    print('复用本 VPS 已有 TUIC v5；不安装或修改 TUIC 服务。链接仅用于本次导出，不另存原始链接。')
+    try:
+        node = parse_tuic(getpass.getpass('粘贴现有 TUIC v5 分享链接（隐藏输入，可直接粘贴）：'))
+        allow_insecure = False
+        if node['insecure']:
+            print('此链接关闭了 TLS 证书验证，存在服务器冒充风险。建议使用受信任证书并重新导出链接。')
+            allow_insecure = confirm('仍按原链接关闭证书验证导出？')
+        rows = manager.rows()
+        configs = export_configs(rows, node, allow_insecure=allow_insecure)
+    except ConfigError as exc:
+        raise Error(str(exc)) from None
+    directory = manager.root / 'exports' / ('tuic-' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:8])
+    for name, contents in configs.items():
+        atomic(directory / name, contents)
+    lines = ['TUIC 加速使用说明', '这些文件含 TUIC 和中转客户端凭据，请只用 SSH/SFTP 下载到自己电脑，勿上传、分享或开启公网订阅服务。',
+             'Clash Verge：导入本地 clash-verge.yaml 配置并启用。',
+             'v2rayN：添加自定义配置服务器，选择 v2rayn-sing-box.json，核心选 sing-box（1.12 或更新稳定版），Socks 端口留空，再启用配置。',
+             '每个 SOCKS5 本地端口固定一个出口，使用下面的账号密码；目标域名请选择通过代理解析。',
+             '同一时刻仅用一个客户端运行这套配置，避免端口冲突。新增/删除/改密码后需重新导出并导入。', '']
+    for row in rows:
+        if row['enabled']:
+            lines.append('SOCKS5 127.0.0.1:' + str(row['port']) + '  账号：' + row['client_user'] + '  密码：' + row['client_password'])
+    lines += ['', '路径：电脑 → TUIC → VPS本机3proxy → 固定上游SOCKS5 → 网站。',
+              'TUIC 服务必须允许访问本机 127.0.0.1 对应端口；若原服务拒绝私网/本机访问，需要定向允许这些端口。',
+              '测速需固定同一上游、同一下载目标和同一时段；本机验证不等于已经提高青岛到VPS的真实吞吐。']
+    atomic(directory / '使用说明.txt', '\n'.join(lines) + '\n')
+    print('导出完成：' + str(directory))
+    print('通过现有 SSH/SFTP 下载该目录里的文件。Clash Verge 导入 clash-verge.yaml；v2rayN 导入 v2rayn-sing-box.json。')
+    print('本地 SOCKS5：127.0.0.1:原端口（例如 20001），账号密码见私有使用说明。文件权限 600；没有上游供应商凭据。')
 
 
 def select_row(manager):
@@ -616,7 +655,7 @@ def uninstall(manager):
 
 
 def menu(manager):
-    print('SOCKS5 本身不加密，请通过 WireGuard 等加密隧道使用；默认来源仅本机，可在添加/修改时指定客户端 IP。')
+    print('已有同台 VPS 的 TUIC？选择 15 添加本机中转，再选 14 导出加速配置。SOCKS5 公网直连本身不加密。')
     while True:
         try:
             with manager.lock():
@@ -626,7 +665,7 @@ def menu(manager):
             state = '运行中' if enabled and running == len(enabled) else ('部分运行/异常' if running else '未运行/暂无启用代理')
             print('\n========================================\n        SOCKS5 中转管理系统\n========================================')
             print('系统状态：' + state + '\n代理数量：' + str(len(rows)) + '\n端口范围：20001-29999')
-            print('1. 添加 SOCKS5 中转\n2. 查看全部中转\n3. 删除 SOCKS5 中转\n4. 修改 SOCKS5 中转\n5. 检测所有代理出口 IP\n6. 检测指定代理\n7. 重启代理服务\n8. 查看运行状态\n9. 查看日志\n10. 备份配置\n11. 恢复配置\n12. 更新程序\n13. 卸载程序\n0. 退出')
+            print('1. 添加 SOCKS5 中转\n2. 查看全部中转\n3. 删除 SOCKS5 中转\n4. 修改 SOCKS5 中转\n5. 检测所有代理出口 IP\n6. 检测指定代理\n7. 重启代理服务\n8. 查看运行状态\n9. 查看日志\n10. 备份配置\n11. 恢复配置\n12. 更新程序\n13. 卸载程序\n14. 导出 TUIC 加速客户端配置\n15. 添加 TUIC 加速用的本机中转\n0. 退出')
             option = ask('请输入选项')
             if option == '0':
                 return
@@ -648,11 +687,13 @@ def menu(manager):
                 uninstall(manager)
                 return
             with manager.lock():
-                if option in ('1', '4'):
+                if option in ('1', '4', '15'):
                     previous = select_row(manager) if option == '4' else None
-                    row = new_row(manager, previous)
+                    row = new_row(manager, previous, local_tuic=option == '15')
                     manager.apply({row['port']: row})
                     show_connection(row)
+                elif option == '14':
+                    export_tuic(manager)
                 elif option in ('2', '8'):
                     show_rows(manager)
                 elif option == '3':
@@ -696,7 +737,7 @@ def menu(manager):
                         manager.restore(backups[index - 1])
                         print('恢复完成，启用端口的出口已验证。')
                 else:
-                    print('无效选项，请输入 0–13。')
+                    print('无效选项，请输入 0–15。')
         except Error as exc:
             print('错误：' + str(exc))
             if (manager.root / 'pending.json').exists():

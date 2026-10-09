@@ -2,10 +2,16 @@ name: relay-tests
 on:
   push:
   workflow_dispatch:
+    inputs:
+      public_bootstrap:
+        description: 'Validate published public v1.1.0 bootstrap anonymously'
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
   linux:
+    if: github.event_name != 'workflow_dispatch' || inputs.public_bootstrap != true
     strategy:
       fail-fast: false
       matrix:
@@ -18,12 +24,27 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
-          bash -n install.sh socks-menu.sh uninstall.sh tests/test-install.sh
-          shellcheck install.sh socks-menu.sh uninstall.sh tests/test-install.sh
+          bash -n start.sh install.sh socks-menu.sh uninstall.sh tests/test-install.sh
+          shellcheck start.sh install.sh socks-menu.sh uninstall.sh tests/test-install.sh
       - name: Fresh install, repeat install and real systemd
         run: sudo env RELAY_DISPOSABLE_HOST=YES bash tests/test-install.sh
       - name: Real core integration suite
         run: sudo python3 tests/test_relay.py
+      - name: Download pinned official client test binaries
+        run: |
+          mkdir -p "$RUNNER_TEMP/relay-clients"
+          cd "$RUNNER_TEMP/relay-clients"
+          curl --proto '=https' --tlsv1.2 -fsSL https://github.com/SagerNet/sing-box/releases/download/v1.14.2/sing-box-1.14.2-linux-amd64.tar.gz -o sing-box.tar.gz
+          echo 'a684484d7477d1437282ee411f4d131d0340aaad60a7868841ebd5d87dd8a0c6  sing-box.tar.gz' | sha256sum -c -
+          tar -xzf sing-box.tar.gz
+          curl --proto '=https' --tlsv1.2 -fsSL https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-amd64-v1.19.32.gz -o mihomo.gz
+          echo '8451100836c9eda194331c2babfad490b2faf30cebc1a04b0e76fd8ac2d35d10  mihomo.gz' | sha256sum -c -
+          gzip -dk mihomo.gz
+          chmod +x mihomo
+          echo "SINGBOX_BINARY=$RUNNER_TEMP/relay-clients/sing-box-1.14.2-linux-amd64/sing-box" >> "$GITHUB_ENV"
+          echo "MIHOMO_BINARY=$RUNNER_TEMP/relay-clients/mihomo" >> "$GITHUB_ENV"
+      - name: Real TUIC client chains and exporter security
+        run: sudo --preserve-env=SINGBOX_BINARY,MIHOMO_BINARY python3 tests/test_clients.py
       - name: Authenticated private-repository one-command bootstrap
         env:
           GH_TOKEN: ${{ github.token }}
@@ -35,3 +56,20 @@ jobs:
         run: |
           sudo journalctl -u 'socks-relay@*' --no-pager -n 80
           sudo sh -c 'for file in /var/log/socks5-relay-manager/service-*.log; do [ ! -f "$file" ] || tail -n 30 "$file"; done'
+  public-install:
+    if: github.event_name == 'workflow_dispatch' && inputs.public_bootstrap == true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Anonymous fixed-version public bootstrap
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.1.0/start.sh -o "$RUNNER_TEMP/socks-relay-setup.sh"
+          sudo bash "$RUNNER_TEMP/socks-relay-setup.sh"
+          test "$(sudo cat /opt/socks5-relay-manager/current/VERSION)" = 1.1.0
+      - name: Installed release real systemd and repeat-install verification
+        run: sudo python3 tests/test_systemd.py

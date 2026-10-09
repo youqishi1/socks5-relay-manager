@@ -51,14 +51,31 @@
 ## 执行
 
 ```bash
-bash -n install.sh socks-menu.sh uninstall.sh tests/test-install.sh
-shellcheck install.sh socks-menu.sh uninstall.sh tests/test-install.sh
+bash -n start.sh install.sh socks-menu.sh uninstall.sh tests/test-install.sh
+shellcheck start.sh install.sh socks-menu.sh uninstall.sh tests/test-install.sh
 THREEPROXY_BINARY=/path/to/3proxy python3 tests/test_relay.py
 # 仅可丢弃的 Ubuntu/Debian 完整系统：
 sudo env RELAY_DISPOSABLE_HOST=YES bash tests/test-install.sh
 ```
 
 CI 使用 Ubuntu 22.04 和 24.04 原生 GitHub runner，不使用 Docker 运行代理。Windows 本地执行同一真实核心集成套件；Windows 不提供 Linux 权限或 systemd 证据。
+
+## v1.1.0 TUIC 加速验证
+
+`tests/test_clients.py` 包含分享链接解析、控制字符/未知参数/重复冲突参数拒绝、证书验证显式确认、客户端文件不含供应商凭据、私有导出权限，以及菜单 15 不询问开放公网来源的检查。
+
+真实链路测试使用本机隔离测试目录、测试证书、官方 sing-box TUIC 服务、Mihomo/sing-box 客户端、真实 3proxy 和两个带认证的 SOCKS5 上游。两个本地入口分别返回上游实际连接来源 `127.0.0.2`、`127.0.0.3`；关闭 TUIC 后请求失败且目标请求数量不增加。未信任的测试证书被两个客户端拒绝。测试证书仅在测试配置中信任/固定指纹，不写入操作系统证书库。
+
+Windows 本地测试使用 Mihomo 1.19.32、sing-box 1.14.2、3proxy 0.9.9.0。CI 下载相同客户端的官方 Linux 文件并校验 GitHub Release 元数据中的固定 SHA-256。可以这样运行：
+
+```bash
+SINGBOX_BINARY=/path/to/sing-box MIHOMO_BINARY=/path/to/mihomo \
+THREEPROXY_BINARY=/path/to/3proxy python3 tests/test_clients.py
+```
+
+测试需要 OpenSSL；没有真实客户端二进制时会跳过链路部分，不将跳过当成通过。v2rayN 导出的是自定义 sing-box 文件，实测对象是 sing-box 内核，没有宣称在每个版本的 v2rayN/Clash Verge 图形界面完成导入操作。
+
+公开仓库发布后，还要用匿名方式验证 raw 入口、Release 安装包和 SHA-256 一致，并在 Ubuntu CI 上执行 `start.sh`。真实青岛到 VPS 的线路、公网吞吐、现有 TUIC 的本机访问规则仍需目标部署验证；本地成功不代表已经测到公网提速。
 
 ## 尚需真实部署验证
 

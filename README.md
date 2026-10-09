@@ -17,38 +17,59 @@ Ubuntu/Debian VPS 上的中文 SSH 管理工具。每个 VPS 监听端口对应�
 - 支持 x86_64、aarch64、armv7l、i686、riscv64 源码构建路径；实际测试范围见 [测试说明](docs/TESTING.md)。
 - 需要上游 SOCKS5 的 IP/域名、端口、用户名、密码。
 
-## 安装（当前仓库为私有）
+## 简单安装与 TUIC 加速
 
-**私有仓库不能匿名执行 `curl raw.githubusercontent.com/...`。** 先在 VPS 上以 root 安装 GitHub CLI 并登录有仓库读取权限的账号：
+推荐路径：**电脑 → 原有 TUIC → 同一 VPS 的本机 3proxy → 固定上游 SOCKS5 → 网站**。TUIC 可以用 QUIC 流承载 TCP 应用连接，3proxy 继续负责每端口独立出口。此功能复用已安装的 TUIC v5，不安装、不改动 TUIC/VLESS 服务。无法仅凭 VLESS 慢、TUIC 快就断言物理线路瓶颈；生产提速仍需在同一出口、目标和时段测量。
 
-```bash
-sudo -i
-apt-get update && apt-get install -y gh ca-certificates
-gh auth login
-```
+依据：[TUIC 官方 TCP 转发协议](https://github.com/tuic-protocol/tuic/blob/master/SPEC.md)、[Mihomo 链式拨号](https://wiki.metacubex.one/config/proxies/dialer-proxy/)、[sing-box detour](https://sing-box.sagernet.org/configuration/shared/dial/)。
 
-登录后，一条命令安装正式版本：
+### 第一步：在 VPS 安装
+
+公开安装入口需要仓库为公开且 `v1.1.0` Release 已发布。以 root 登录 VPS；普通用户先执行 `sudo -i`。复制一整行：
 
 ```bash
-SOCKS_REPO_REF=v1.0.0 bash <(gh api -H 'Accept: application/vnd.github.raw+json' 'repos/youqishi1/socks5-relay-manager/contents/install.sh?ref=v1.0.0')
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.1.0/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
 ```
 
-`gh` 的认证信息由 GitHub CLI 管理；本项目不把令牌写入日志或 3proxy 配置，也不把令牌放在 curl 参数中。安装脚本会通过已认证的 `gh api` 下载整个指定版本的源码。务必以同一个 root 账号执行登录和安装。无需安装过程中输入任何代理凭据。
+这行命令先完整下载入口，下载失败不执行。入口使用固定版本的 Release 安装包，校验写在脚本里的 SHA-256，校验失败不会执行安装。3proxy 官方源码另做固定 SHA-256 校验。信任来源为此 GitHub 仓库的固定版本、官方 3proxy 和发行版签名软件源；不是独立代码签名。交互终端安装后自动打开中文菜单；以后执行 `socks-menu`。
 
-也可以先取得源码，再离线执行管理程序安装步骤（安装依赖和核心仍需网络）：
+若系统没有 curl，先执行 `apt-get update && apt-get install -y curl ca-certificates`。
+
+### 第二步：添加固定出口
+
+1. 选择菜单 **15：添加 TUIC 加速用的本机中转**。
+2. 输入上游 SOCKS5 的地址、端口、用户名、密码；客户端账号密码选择自动生成。
+3. 回车确认保存。默认自动使用 `127.0.0.1` 监听和来源限制，不需要开放 20001 等 SOCKS5 公网端口。
+4. 有几个上游出口就重复几次，每个端口独立绑定固定上游。
+
+原有使用菜单 1 建立的端口可通过菜单 4 将监听地址改成 `127.0.0.1`、来源改成 `127.0.0.1`，再导出。不会自动改变旧端口的监听设置。
+
+### 第三步：导入电脑客户端
+
+1. 选择菜单 **14：导出 TUIC 加速客户端配置**。
+2. 从 v2rayN 复制现有 TUIC v5 分享链接，在 VPS 菜单中粘贴。输入不显示字符，这是隐藏密码的正常行为。
+3. 用现有 SSH/SFTP 下载提示目录中的文件，不能把文件上传 GitHub 或作为公开订阅。
+4. **Clash Verge**：在配置页导入本地 `clash-verge.yaml` 并启用。文件使用 JSON 序列化，但它也是有效 YAML，支持 Mihomo。
+5. **v2rayN**：在“添加自定义配置服务器”中选择 `v2rayn-sing-box.json`，核心选择 sing-box（1.12 或更新稳定版），自定义配置的“Socks 端口”留空，启用该配置。多端口入口由文件负责，按下一步手动设置应用代理。此模式下托盘系统代理不能自动对应这些入口。[v2rayN 官方自定义配置说明](https://github.com/2dust/v2rayN/wiki/Description-of-some-ui)。
+6. 给浏览器或其他程序填写 SOCKS5 `127.0.0.1:20001` 等本地端口，使用导出目录中 `使用说明.txt` 的对应客户端账号密码。需要通过 SOCKS5 发送目标域名（curl 使用 `socks5h`）。
+
+例如：电脑的 `127.0.0.1:20001` 固定到 VPS 的本机 `20001`，再到上游 A；`20002` 固定到 B。固定入口不经过自动切换组，也没有 DIRECT 回退。不要同时在两个客户端启用这份多端口配置，否则会争用本地端口。Clash Verge 的普通系统代理出口可在“中转出口”组手动选择；该组只含上游中转节点。
+
+现有 TUIC 服务必须允许访问本机 `127.0.0.1:20001–29999` 中已启用的端口；原服务如有拒绝私网规则，应仅允许这些需要的本机端口。TUIC 服务自身的直连出站负责连接本机 3proxy；不要将 TUIC 的所有出站再设为这个 TUIC 节点，避免循环。
+
+导出只含 TUIC 和中转客户端凭据，**不含上游供应商账号密码**。文件在 `/etc/socks5-relay-manager/exports` 的独立私有目录内，目录 700、文件 600。该目录中的文件仍是敏感信息，下载到 Windows 后也要自行保护。新建/删除/改客户端密码后需重新导出并导入，停用某个出口后原配置访问它会失败。
+
+默认保留 TLS 证书验证并关闭 0-RTT。链接原本设置 `allow_insecure=1` 时，必须明确确认才会按原设置关闭证书验证，推荐改用受信任证书。只接受标准 TUIC v5 参数；未知参数或重复冲突参数会拒绝导出，避免悄悄改变原配置。
+
+### 其他安装方式
+
+仍保留私有仓库的认证安装：root 安装 `gh` 后执行 `gh auth login`，然后：
 
 ```bash
-gh repo clone youqishi1/socks5-relay-manager
-cd socks5-relay-manager
-git checkout v1.0.0
-bash install.sh --local
+SOCKS_REPO_REF=v1.1.0 bash <(gh api -H 'Accept: application/vnd.github.raw+json' 'repos/youqishi1/socks5-relay-manager/contents/install.sh?ref=v1.1.0')
 ```
 
-如果所有者以后主动把仓库公开，才可以使用匿名 raw 安装命令：
-
-```bash
-SOCKS_REPO_REF=v1.0.0 bash <(curl -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.0.0/install.sh)
-```
+或取得源码后在源码目录执行 `bash install.sh --local`。安装依赖和核心仍需网络。VPS 不需要提供 GitHub 令牌给任何第三方。客户端导出功能不向外部配置转换网站发送链接。
 
 首次安装启动管理系统，但不创建虚假的上游或开放端口。选择添加时生成 `client01` 等账号和 32 字符随机密码。重复安装会保留全部代理、密码和活动配置，并备份当前配置。更新会重启已有启用服务，因此有短暂中断；普通增删改只操作对应端口。
 
@@ -69,7 +90,8 @@ sudo socks-menu
 7. 重启代理服务          8. 查看运行状态
 9. 查看日志             10. 备份配置
 11. 恢复配置            12. 更新程序
-13. 卸载程序             0. 退出
+13. 卸载程序            14. 导出 TUIC 加速客户端配置
+15. 添加 TUIC 本机中转    0. 退出
 ```
 
 ### 添加
@@ -104,7 +126,7 @@ sudo socks-menu
 
 ## 安全与网络
 
-- **SOCKS5 不加密**。推荐先建立 WireGuard 等加密隧道，并绑定隧道地址、限定客户端来源。
+- **SOCKS5 不加密**。优先复用同台 VPS 已有的 TUIC 加密通道，让 3proxy 仅监听本机；也可使用 WireGuard 并绑定隧道地址、限定来源。
 - 不修改 SSH、UFW、iptables、nftables 或云安全组。需要公网访问时由管理员自行仅放行需要的 TCP 端口和客户端 IP。
 - 所有配置、明文凭据、备份、日志均在 root 私有目录（700），文件权限 600。root 明文存储是必要功能选择；不要把 root 共享给不可信人员。
 - 代理进程以 root 读取私有配置，systemd 清空 capabilities，启用文件系统只读保护、私有临时目录和 `NoNewPrivileges`。这不能消除代理核心漏洞风险，应保持系统更新。

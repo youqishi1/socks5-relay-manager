@@ -9,3 +9,6 @@ relays.json
 *.backup.json
 *.log
 .env
+exports/
+*.client.yaml
+*.client.json

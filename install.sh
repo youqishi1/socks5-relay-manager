@@ -4,7 +4,7 @@ set -Eeuo pipefail
 trap 'echo "错误：安装步骤失败，请检查上方的软件源、网络或文件权限错误。" >&2' ERR
 umask 077
 REPO='youqishi1/socks5-relay-manager'
-REF="${SOCKS_REPO_REF:-main}"
+REF="${SOCKS_REPO_REF:-v1.1.0}"
 CORE_COMMIT='da99424eac4092e3722f1a5b1844cfe80478f580'
 CORE_SHA256='9541e866d9ce04d051b07aa7b7c23bf717c5bc5ef7a9f07963e31a139038faeb'
 CORE_VERSION='0.9.9.0'
@@ -133,10 +133,11 @@ fi
 python3 - "$stage/source" <<'PY'
 import pathlib, py_compile, sys
 p = pathlib.Path(sys.argv[1])
-for name in ('install.sh', 'socks-menu.sh', 'uninstall.sh', 'VERSION', 'scripts/manager.py', 'systemd/socks-relay@.service'):
+for name in ('install.sh', 'socks-menu.sh', 'uninstall.sh', 'VERSION', 'scripts/manager.py', 'scripts/client_config.py', 'systemd/socks-relay@.service'):
     if not (p / name).is_file() or (p / name).is_symlink():
         sys.exit('错误：管理程序源码不完整或含有不安全链接。')
-py_compile.compile(str(p / 'scripts/manager.py'), doraise=True)
+for script in (p / 'scripts').glob('*.py'):
+    py_compile.compile(str(script), doraise=True)
 PY
 bash -n "$stage/source/install.sh" "$stage/source/socks-menu.sh" "$stage/source/uninstall.sh"
 if [[ -L $APP/current ]]; then
@@ -263,4 +264,5 @@ printf '%s\n' "$CORE_VERSION" >"$APP/core-version"
 chmod 600 "$APP/core-version"
 completed=1
 echo '安装成功！执行 socks-menu 打开中文菜单。首次安装暂无中转，选择 1 添加并生成安全账号密码。'
-echo '未修改 SSH、防火墙或云安全组。建议通过 WireGuard 等加密隧道访问；按来源 IP 放行所需端口。'
+echo '已有同台 VPS 的 TUIC：选择 15 添加本机中转，再选 14 导出客户端配置；无需开放 SOCKS5 公网端口。'
+echo '未修改 SSH、防火墙、云安全组或已有 TUIC 服务。'
