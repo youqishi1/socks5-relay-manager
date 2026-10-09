@@ -14,7 +14,7 @@ TCP 使用 Shadowsocks 2022，TUIC 使用 QUIC/TLS。两种入口共用公网端
 以 root 登录，普通用户先 `sudo -i`，再复制一整行：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.2.0/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.2.1/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
 ```
 
 固定版本安装包先校验 SHA-256，再执行安装。交互终端安装后自动打开菜单，以后执行 `sudo socks-menu`。没有 curl 时先安装 `curl ca-certificates`。下载源码后在源码目录执行 `bash install.sh --local`。
@@ -33,7 +33,7 @@ socks5://账号:密码@IP:端口
 
 冒号格式按前 3 个冒号拆分，密码中的冒号保留；账号含冒号/@ 时用 URL 格式和 URL 编码。支持可打印特殊字符及 UTF-8 密码，拒绝换行、控制字符及 3proxy 保留用户名 `*`。
 
-程序检测上游，自动分配端口、生成凭据/证书、启动两种入口并生成私有客户端文件。菜单 **16** 随时查看连接信息和密码；**18** 重新导出；**19** 给旧中转启用双模式，此时旧原生端口改为本机入口，电脑使用新加密公网端口。
+程序检测上游，自动分配端口、生成凭据/证书、启动两种入口并生成私有客户端文件。菜单 **16** 一次查看全部中转的连接信息、SS 密钥、TUIC UUID/密码及本机账密，无需逐个输入端口；**18** 重新导出；**19** 给旧中转启用双模式，此时旧原生端口改为本机入口，电脑使用新加密公网端口。
 
 旧版默认仅允许本机来源，电脑直接连接原生 SOCKS5 可能因此被拒绝。新版状态显示来源和绑定地址。公网地址优先从网卡发现，NAT 时通过不含凭据的 HTTPS 查询获取并保存；失败时菜单 **20** 设置公网 IP/域名。NAT 的端口映射仍需主机商提供。
 
@@ -44,6 +44,8 @@ socks5://账号:密码@IP:端口
 - **Clash Verge**：导入 `clash-dual.yaml` 并启用。每个出口的模式组可选 TUIC/TCP，固定同一个上游。
 - **v2rayN TCP**：复制 `连接信息.txt` 的 `ss://` 链接导入并启用，本地端口沿用 v2rayN 设置。
 - **v2rayN TUIC**：支持 ConfigVersion 4 的版本可以复制 `v2rayN-一键导入.txt` 全部内容，从剪贴板一次导入 TCP/TUIC。TUIC 使用内嵌证书的 `v2rayn://` 官方内部分享格式。[官方解析源码](https://github.com/2dust/v2rayN/blob/master/v2rayN/ServiceLib/Handler/Fmt/InnerFmt.cs)。旧版不支持时添加自定义配置，选择 `v2rayn-tuic.json`，核心选 sing-box 1.14.2 或兼容更新版，Socks 端口留空，再启用。[官方说明](https://github.com/2dust/v2rayN/wiki/Description-of-some-ui)。
+
+**常见 TUIC 短链接**：`TUIC-普通链接.txt` 使用 `tuic://UUID:密码@地址:端口?...` 写法。导入短链接后，需要在 TUIC 节点证书/Cert 字段粘贴对应 `TUIC-20001-证书.pem` 的完整公开 PEM（包括首尾标记），保持证书验证开启。普通短链接无法携带 v2rayN 自动信任的 PEM 信息，单独复制并不能保证连接成功。没有该证书编辑功能的旧客户端，请用上述安全一键导入或自定义 JSON；Clash 使用完整 YAML。不要为了使用短链接关闭验证。公开证书可以交给自己的客户端，私钥始终留在 VPS。
 
 多端口文件的本机 SOCKS5 是 `127.0.0.1:20001` 等，账号密码见连接信息；一次只运行一个客户端的多端口文件，避免本机争用。新增、删除、改密码后需重新导出并导入。每个模式组仅包含相同出口的两种入口，没有跨出口自动切换或 DIRECT 回退。Clash 系统代理通过“中转出口”组选择出口。
 
@@ -62,7 +64,7 @@ socks5://账号:密码@IP:端口
 | 7 / 9 | 重启指定中转及入口 / 查看日志 |
 | 10 / 11 | 备份 / 恢复 |
 | 12 / 13 | 更新 / 卸载 |
-| 16 | 查看账号密码及连接信息 |
+| 16 | 一次查看全部连接信息和账密 |
 | 18 | 重新导出客户端文件 |
 | 19 | 旧中转启用双模式 |
 | 20 | 设置公网地址 |
@@ -84,6 +86,8 @@ socks5://账号:密码@IP:端口
 - 3proxy 日志记录端口、错误码、字节数和时长，入口只记录错误，不记录明文配置。菜单对凭据额外做替换；日志每天轮转，保留 7 份。
 - 不修改 SSH、防火墙、云安全组、系统 DNS/代理或已有服务；仅管理本项目三个目录、两个服务模板、logrotate 和入口命令。
 - IP 换成域名不会给原生 SOCKS5 加密。加密保护传输，不能保证具体用途合法或不会被调查，应遵守所在地法规。
+
+SS2022 使用认证加密和随机预共享密钥，保护数据机密性与完整性，但协议不提供前向保密；TUIC 的 QUIC/TLS 1.3 在正常证书验证和临时密钥交换下可以提供前向保密。二者都有安全配置要求，这个差别不意味着 TUIC 在国内不会被识别、封锁或调查，也不代表自动合法。[SS2022 规范](https://shadowsocks.org/doc/sip022.html)、[QUIC/TLS 标准](https://www.rfc-editor.org/rfc/rfc9001.html)、[现行国际联网规定](https://xzfg.moj.gov.cn/front/law/detail?LawID=1713)。
 
 项目目录：`/opt/socks5-relay-manager`、`/etc/socks5-relay-manager`、`/var/log/socks5-relay-manager`。服务为 `socks-relay@20001.service` 和 `socks-access@20001.service`，异常退出 3 秒后重启。容量取决于 VPS 和上游。
 

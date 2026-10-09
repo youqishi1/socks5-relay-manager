@@ -703,6 +703,7 @@ def export_dual(manager):
         'Clash Verge：导入本地 clash-dual.yaml 并启用；每个出口的模式列表可选 TUIC 或 TCP。',
         'v2rayN：复制 v2rayN-一键导入.txt 的全部内容，从剪贴板导入两种模式。TUIC 使用保留证书的内部分享格式，需支持 ConfigVersion 4。',
         '旧版 v2rayN 不支持内部链接时，TUIC 添加自定义配置，选择 v2rayn-tuic.json，核心选择 sing-box 1.14.2 或兼容更新版，Socks 端口留空，再启用。',
+        'TUIC-普通链接.txt 是常见 tuic:// 格式。使用本项目自签证书时，导入短链接还需在节点证书/Cert 字段粘贴对应 TUIC-端口-证书.pem 全文；不要关闭证书验证。',
         'v2rayN 自定义配置的本地 SOCKS5 端口及账号密码见连接信息.txt。只有导入 ss:// 单节点时，本地端口沿用 v2rayN 设置。',
         '同一套多端口配置只运行一个客户端，避免本机端口冲突。新增、删除或改密码后，菜单 18 重新导出并导入。',
         'TUIC 证书在文件内验证，不需要购买域名，不关闭证书验证；私钥保留在 VPS，未包含在客户端文件中。',
@@ -734,13 +735,15 @@ def enable_dual(manager, row):
 
 def show_connection(row, manager=None):
     if row.get('access'):
-        from access import configs
+        from access import configs, METHOD
         address = public_address(manager) if manager else vps_address({'bind': '0.0.0.0'})
         if not address:
             raise Error('尚未识别 VPS 公网地址，请设置后重新查看。')
         front = row['access']
         print('\n双模式入口：' + address + ':' + str(front['port']) + '（TCP + UDP）')
-        print('内部中转编号：' + str(row['port']) + '；本机账号：' + row['client_user'] + '；本机密码：' + row['client_password'])
+        print('内部中转编号：' + str(row['port']) + '；状态：' + ('启用' if row['enabled'] else '停用'))
+        print('本机账号：' + row['client_user'] + '；本机密码：' + row['client_password'])
+        print('SS 方法：' + METHOD + '\nSS 密钥：' + front['ss_password'])
         print('TUIC UUID：' + front['uuid'] + '\nTUIC 密码：' + front['tuic_password'])
         if row['enabled']:
             print(configs([row], address)['连接信息.txt'])
@@ -760,6 +763,18 @@ def show_connection(row, manager=None):
     print('========================================\n凭据只在此终端显示，请妥善保存。')
     if row['bind'] == '127.0.0.1':
         print('这是 VPS 本机入口。选择菜单 14 导出 TUIC 客户端配置后，再连接电脑本机的对应端口。')
+
+
+def show_all_connections(manager):
+    rows = manager.rows()
+    if not rows:
+        print('暂无中转。')
+        return
+    print('全部中转连接信息与账密，共 ' + str(len(rows)) + ' 条。仅在 root 私有终端查看。')
+    for index, row in enumerate(rows, 1):
+        print('\n========== 第 ' + str(index) + ' 条 / 中转编号 ' + str(row['port']) + ' ==========')
+        show_connection(row, manager)
+    print('\n以上包含连接秘密，请勿公开。TUIC 短链接需要配套证书；一键导入文件已包含证书信任。')
 
 
 def export_tuic(manager):
@@ -859,7 +874,7 @@ def menu(manager):
             state = '运行中' if enabled and running == len(enabled) else ('部分运行/异常' if running else '未运行/暂无启用代理')
             print('\n========================================\n        SOCKS5 中转管理系统\n========================================')
             print('系统状态：' + state + '\n代理数量：' + str(len(rows)) + '\n端口范围：20001-29999')
-            print('1. 一键添加加密 TCP + TUIC（粘贴整条 SOCKS5）\n2. 查看全部中转\n3. 删除 SOCKS5 中转\n4. 修改 SOCKS5 中转\n5. 检测所有代理出口 IP\n6. 检测指定代理\n7. 重启代理服务\n8. 查看运行状态\n9. 查看日志\n10. 备份配置\n11. 恢复配置\n12. 更新程序\n13. 卸载程序\n14. 高级：复用现有 TUIC 导出配置\n15. 高级：手动添加本机中转\n16. 查看连接信息和账号密码\n17. 高级：粘贴整条信息添加本机中转\n18. 重新导出双模式客户端文件\n19. 给已有中转启用加密 TCP + TUIC\n20. 设置 VPS 公网 IP/域名\n21. 高级：添加原生 SOCKS5 中转\n0. 退出')
+            print('1. 一键添加加密 TCP + TUIC（粘贴整条 SOCKS5）\n2. 查看全部中转\n3. 删除 SOCKS5 中转\n4. 修改 SOCKS5 中转\n5. 检测所有代理出口 IP\n6. 检测指定代理\n7. 重启代理服务\n8. 查看运行状态\n9. 查看日志\n10. 备份配置\n11. 恢复配置\n12. 更新程序\n13. 卸载程序\n14. 高级：复用现有 TUIC 导出配置\n15. 高级：手动添加本机中转\n16. 查看全部连接信息和账密\n17. 高级：粘贴整条信息添加本机中转\n18. 重新导出双模式客户端文件\n19. 给已有中转启用加密 TCP + TUIC\n20. 设置 VPS 公网 IP/域名\n21. 高级：添加原生 SOCKS5 中转\n0. 退出')
             option = ask('请输入选项')
             if option == '0':
                 return
@@ -893,7 +908,7 @@ def menu(manager):
                 elif option == '14':
                     export_tuic(manager)
                 elif option == '16':
-                    show_connection(select_row(manager), manager)
+                    show_all_connections(manager)
                 elif option == '17':
                     row = pasted_row(manager)
                     manager.apply({row['port']: row})

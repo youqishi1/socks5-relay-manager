@@ -30,11 +30,11 @@ if ! command -v curl >/dev/null; then
     apt-get update
     apt-get install -y --no-install-recommends curl ca-certificates
 fi
-echo '正在下载固定版本 v1.2.0 安装包...'
+echo '正在下载固定版本 v1.2.1 安装包...'
 curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 10 --max-time 180 \
-    https://github.com/youqishi1/socks5-relay-manager/releases/download/v1.2.0/socks5-relay-manager-v1.2.0-install.tar.gz \
+    https://github.com/youqishi1/socks5-relay-manager/releases/download/v1.2.1/socks5-relay-manager-v1.2.1-install.tar.gz \
     -o "$work/install.tar.gz"
-echo "de6ba053e8b3c10ab45ab80b18102cd351823ee4c8b48d8e77721d1f68c72fb3  $work/install.tar.gz" | sha256sum -c -
+echo "33b6105bfa07c69692c60a93e0c9a5aeabc82f5e236e67acab23c5d563c97075  $work/install.tar.gz" | sha256sum -c -
 mkdir "$work/source"
 tar -xzf "$work/install.tar.gz" -C "$work/source"
 bash "$work/source/install.sh" --local

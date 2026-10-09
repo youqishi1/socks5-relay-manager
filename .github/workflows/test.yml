@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       public_bootstrap:
-        description: 'Validate published public v1.2.0 bootstrap anonymously'
+        description: 'Validate published public v1.2.1 bootstrap anonymously'
         type: boolean
         default: false
 permissions:
@@ -70,8 +70,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Anonymous fixed-version public bootstrap
         run: |
-          curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.2.0/start.sh -o "$RUNNER_TEMP/socks-relay-setup.sh"
+          curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.2.1/start.sh -o "$RUNNER_TEMP/socks-relay-setup.sh"
           sudo bash "$RUNNER_TEMP/socks-relay-setup.sh"
-          test "$(sudo cat /opt/socks5-relay-manager/current/VERSION)" = 1.2.0
+          test "$(sudo cat /opt/socks5-relay-manager/current/VERSION)" = 1.2.1
       - name: Installed release real systemd and repeat-install verification
         run: sudo env RELAY_DISPOSABLE_HOST=YES python3 tests/test_systemd.py

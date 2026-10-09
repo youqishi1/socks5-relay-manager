@@ -4,7 +4,7 @@ set -Eeuo pipefail
 trap 'echo "错误：安装步骤失败，请检查上方的软件源、网络或文件权限错误。" >&2' ERR
 umask 077
 REPO='youqishi1/socks5-relay-manager'
-REF="${SOCKS_REPO_REF:-v1.2.0}"
+REF="${SOCKS_REPO_REF:-v1.2.1}"
 CORE_COMMIT='da99424eac4092e3722f1a5b1844cfe80478f580'
 CORE_SHA256='9541e866d9ce04d051b07aa7b7c23bf717c5bc5ef7a9f07963e31a139038faeb'
 CORE_VERSION='0.9.9.0'

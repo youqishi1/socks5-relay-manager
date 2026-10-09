@@ -110,13 +110,22 @@ def v2rayn_link(front, address, label):
     return 'v2rayn://tuic/' + data
 
 
+def tuic_link(front, address, label):
+    """Common TUIC URI. Certificate trust is supplied separately, never disabled."""
+    from urllib.parse import quote, urlencode
+    server = '[' + address + ']' if ':' in address else address
+    query = urlencode({'sni': SNI, 'alpn': 'h3', 'congestion_control': 'bbr', 'allow_insecure': '0'})
+    return ('tuic://' + front['uuid'] + ':' + quote(front['tuic_password'], safe='') + '@' + server
+            + ':' + str(front['port']) + '?' + query + '#' + quote(label, safe=''))
+
+
 def configs(rows, address):
     from urllib.parse import quote
     clash = {'mode': 'rule', 'allow-lan': False, 'log-level': 'error',
              'proxies': [], 'proxy-groups': [], 'listeners': [], 'rules': []}
     clients = {mode: {'log': {'level': 'error'}, 'inbounds': [], 'outbounds': [],
                       'route': {'rules': []}} for mode in ('tcp', 'tuic')}
-    links, quick = [], []
+    links, quick, standard, certificates = [], [], [], {}
     rows = sorted((row for row in rows if row['enabled'] and row.get('access')), key=lambda row: row['port'])
     if not rows:
         raise AccessError('暂无启用的双模式中转。')
@@ -162,18 +171,27 @@ def configs(rows, address):
             clients[mode]['route']['rules'].append({'inbound': ['local-' + str(port)], 'action': 'route', 'outbound': tag})
         server = '[' + address + ']' if ':' in address else address
         link = 'ss://' + METHOD + ':' + quote(front['ss_password'], safe='') + '@' + server + ':' + str(public) + '#' + quote(tcp_tag)
-        tuic_link = v2rayn_link(front, address, tuic_tag)
-        quick += [link, tuic_link]
+        internal = v2rayn_link(front, address, tuic_tag)
+        ordinary = tuic_link(front, address, tuic_tag)
+        cert_name = 'TUIC-' + str(port) + '-证书.pem'
+        certificates[cert_name] = front['certificate']
+        standard.append(ordinary)
+        quick += [link, internal]
         links += ['端口 ' + str(port) + ' 的加密 TCP 分享链接（v2rayN 可直接导入）：', link,
-                  'TUIC：v2rayN 内部分享链接（支持 ConfigVersion 4 的版本，保留证书验证）：', tuic_link,
+                  'TUIC 常见分享格式（需同时信任配套证书，不能仅导入此链接就保证可用）：', ordinary,
+                  '配套公开证书：' + cert_name + '；证书 SHA-256：' + front['fingerprint'],
+                  'v2rayN 导入上面短链接后，在 TUIC 节点编辑页的证书/Cert 字段粘贴配套 PEM 全文；保持证书验证开启。',
+                  '更方便的安全导入：复制 v2rayN-一键导入.txt 全部内容，或 Clash 导入 clash-dual.yaml。',
+                  'TUIC：v2rayN 内部分享链接（支持 ConfigVersion 4 的版本，保留证书验证）：', internal,
                   '若旧版 v2rayN 不支持内部分享链接，使用自定义 v2rayn-tuic.json；Clash 使用 clash-dual.yaml。',
                   '本地 SOCKS5：127.0.0.1:' + str(port) + ' 账号：' + row['client_user'] + ' 密码：' + row['client_password'], '']
     clash['proxy-groups'].append({'name': '中转出口', 'type': 'select', 'proxies': groups})
     clash['rules'] = ['MATCH,中转出口']
     for client in clients.values():
         client['route']['final'] = client['outbounds'][0]['tag']
-    return {'clash-dual.yaml': json.dumps(clash, ensure_ascii=False, indent=2) + '\n',
+    return {**certificates, 'clash-dual.yaml': json.dumps(clash, ensure_ascii=False, indent=2) + '\n',
             'v2rayn-tcp.json': json.dumps(clients['tcp'], ensure_ascii=False, indent=2) + '\n',
             'v2rayn-tuic.json': json.dumps(clients['tuic'], ensure_ascii=False, indent=2) + '\n',
             'v2rayN-一键导入.txt': '\n'.join(quick) + '\n',
+            'TUIC-普通链接.txt': '\n'.join(standard) + '\n',
             '连接信息.txt': '\n'.join(links) + '\n'}

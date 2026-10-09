@@ -177,11 +177,12 @@ class DualChains(unittest.TestCase):
         upstream = self.fixture.upstream(4)
         port = self.manager.allocate()
         line = 'socks5://' + quote(upstream.user, safe='') + ':' + quote(upstream.password, safe='') + '@127.0.0.1:' + str(upstream.server_address[1])
-        answers = iter(['1', '16', str(port), '0'])
+        answers = iter(['1', '16', '0'])
         output = io.StringIO()
         with patch.object(self.manager, 'lock', side_effect=contextlib.nullcontext), \
              patch.object(m.getpass, 'getpass', return_value=line) as paste, \
              patch.object(m, 'public_address', return_value='203.0.113.1'), \
+             patch.object(m, 'select_row', side_effect=AssertionError('全部账密不应要求选择端口')), \
              patch('builtins.input', side_effect=lambda _: next(answers)), contextlib.redirect_stdout(output):
             m.menu(self.manager)
         self.assertEqual(paste.call_count, 1)
@@ -190,12 +191,46 @@ class DualChains(unittest.TestCase):
         self.assertEqual(row['bind'], '127.0.0.1')
         self.assertIn(row['access']['tuic_password'], output.getvalue())
         self.assertIn('ss://', output.getvalue())
+        for saved in self.manager.rows():
+            self.assertIn(saved['client_password'], output.getvalue())
+            self.assertIn(saved['access']['ss_password'], output.getvalue())
+            self.assertIn(saved['access']['tuic_password'], output.getvalue())
         files = list((self.manager.root / 'exports' / 'dual').glob('*'))
-        self.assertEqual(len(files), 6)
+        self.assertEqual(len(files), 7 + len(self.manager.rows()))
         for path in files:
             self.assertNotIn(upstream.password, path.read_text(encoding='utf-8'))
             if os.name == 'posix':
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_common_tuic_uri_certificate_and_real_connection(self):
+        import client_config
+        row = copy.deepcopy(self.rows[0])
+        row['access']['tuic_password'] = 'fixture-secret:@ /? +%#'
+        self.manager.apply({row['port']: row})
+        rows = [row, self.rows[1]]
+        exports = a.configs(rows, '203.0.113.1')
+        line = exports['TUIC-普通链接.txt'].splitlines()[0]
+        self.assertTrue(line.startswith('tuic://'))
+        node = client_config.parse_tuic(line)
+        self.assertEqual(node['password'], row['access']['tuic_password'])
+        self.assertFalse(node['insecure'])
+        pem = exports['TUIC-' + str(row['port']) + '-证书.pem']
+        self.assertNotIn('PRIVATE KEY', pem)
+        config = json.loads(exports['v2rayn-tuic.json'])
+        port = m.free_port()
+        config['inbounds'] = [config['inbounds'][0]]
+        config['inbounds'][0]['listen_port'] = port
+        outbound = config['outbounds'][0]
+        outbound.update(server='127.0.0.1', server_port=node['port'], uuid=node['uuid'], password=node['password'], congestion_control=node['cc'])
+        outbound['tls'].update(server_name=node['sni'], alpn=node['alpn'], insecure=node['insecure'], certificate=pem.splitlines())
+        config['outbounds'] = [outbound]
+        config['route']['rules'] = [config['route']['rules'][0]]
+        process = self.launch('sing', config, 'common-tuic-link')
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline and not m.listening(port, '127.0.0.1'):
+            self.assertIsNone(process.poll())
+            time.sleep(.05)
+        self.assertEqual(m.health('127.0.0.1', port, row['client_user'], row['client_password'], self.manager.ip_url)[0], '127.0.0.2')
 
     def test_v2rayn_internal_link_preserves_tls_and_runs_real_core(self):
         line = a.configs(self.rows, '203.0.113.1')['v2rayN-一键导入.txt'].splitlines()[1]
