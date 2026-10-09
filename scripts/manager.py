@@ -853,6 +853,9 @@ def uninstall(manager):
         manager.backup()
         for row in manager.rows():
             manager.backend.apply(row['port'], None)
+    shortcut = Path('/usr/local/bin/sb1')
+    if shortcut.is_symlink() and os.readlink(shortcut) == '/usr/local/bin/socks-menu':
+        shortcut.unlink()
     for path in (Path('/etc/systemd/system/socks-relay@.service'), Path('/etc/systemd/system/socks-access@.service'), Path('/etc/logrotate.d/socks5-relay-manager'),
                  Path('/usr/local/bin/socks-menu'), Path('/usr/local/bin/socks-relay-uninstall')):
         path.unlink(missing_ok=True)
@@ -889,7 +892,7 @@ def menu(manager):
                     result = subprocess.run(['bash', str(APP / 'current' / 'install.sh')], env={**os.environ, 'SOCKS_REPO_REF': ref})
                     if result.returncode:
                         raise Error('更新失败；原程序版本已保留或回滚。')
-                    print('更新完成，请重新打开 socks-menu。')
+                    print('更新完成，请执行 sb1 重新打开菜单。')
                     return
                 continue
             if option == '13':
@@ -974,7 +977,7 @@ def menu(manager):
         except Error as exc:
             print('错误：' + str(exc))
             if (manager.root / 'pending.json').exists():
-                print('未完成事务已保留。请先修复服务故障，再重新执行 socks-menu；本次不继续自动重试。')
+                print('未完成事务已保留。请先修复服务故障，再重新执行 sb1；本次不继续自动重试。')
                 return
         except (EOFError, KeyboardInterrupt):
             print('\n已退出。未完成事务将在下次管理操作时回滚。')
@@ -983,7 +986,7 @@ def menu(manager):
 
 def main():
     if os.name != 'posix' or os.geteuid() != 0:
-        raise Error('管理操作需要 root 权限，请使用 sudo socks-menu。')
+        raise Error('管理操作需要 root 权限，请使用 sudo sb1。')
     os.umask(0o077)
     args = sys.argv[1:]
     # systemd's read-only /etc sandbox must never be chmod'ed by the launcher.
@@ -1009,7 +1012,7 @@ def main():
         with manager.lock():
             show_rows(manager)
     else:
-        raise Error('用法：socks-menu，或 manager.py status/check。')
+        raise Error('用法：sb1（兼容 socks-menu），或 manager.py status/check。')
 
 
 if __name__ == '__main__':

@@ -20,6 +20,11 @@ upstream.requests, upstream.exit_source = [], '127.0.0.2'
 manager = m.Manager(ip_url='http://exit.invalid:' + str(target.server_address[1]))
 rows = []
 try:
+    shortcut = Path('/usr/local/bin/sb1')
+    assert shortcut.is_symlink() and os.readlink(shortcut) == '/usr/local/bin/socks-menu'
+    menu = subprocess.run(['sb1'], input='0\n', text=True, capture_output=True, check=True)
+    assert '查看全部连接信息和账密' in menu.stdout
+    print('PASS: sb1 opens the actual Chinese management menu', flush=True)
     with manager.lock():
         for i in range(3):
             row = dict(port=manager.allocate(), upstream_host='127.0.0.1', upstream_port=upstream.server_address[1],
@@ -41,6 +46,7 @@ try:
     print('PASS: actual encrypted TCP + TUIC service, boot enablement, TCP/UDP listener ownership', flush=True)
     original = manager.pointers()
     subprocess.run(['bash', 'install.sh', '--local'], check=True)
+    assert shortcut.is_symlink() and os.readlink(shortcut) == '/usr/local/bin/socks-menu'
     assert manager.pointers() == original
     for row in rows:
         assert manager.verify(row)[0] == '127.0.0.2'

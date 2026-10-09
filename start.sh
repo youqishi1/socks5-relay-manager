@@ -30,16 +30,16 @@ if ! command -v curl >/dev/null; then
     apt-get update
     apt-get install -y --no-install-recommends curl ca-certificates
 fi
-echo '正在下载固定版本 v1.2.1 安装包...'
+echo '正在下载固定版本 v1.2.2 安装包...'
 curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 10 --max-time 180 \
-    https://github.com/youqishi1/socks5-relay-manager/releases/download/v1.2.1/socks5-relay-manager-v1.2.1-install.tar.gz \
+    https://github.com/youqishi1/socks5-relay-manager/releases/download/v1.2.2/socks5-relay-manager-v1.2.2-install.tar.gz \
     -o "$work/install.tar.gz"
-echo "33b6105bfa07c69692c60a93e0c9a5aeabc82f5e236e67acab23c5d563c97075  $work/install.tar.gz" | sha256sum -c -
+echo "4d7918c9b29e9811e90ba9744cdc1f8981857ef428b2755e8b6bf83c5683b4c7  $work/install.tar.gz" | sha256sum -c -
 mkdir "$work/source"
 tar -xzf "$work/install.tar.gz" -C "$work/source"
 bash "$work/source/install.sh" --local
 if [[ -t 0 ]]; then
-    socks-menu
+    sb1
 else
-    echo '安装完成。执行 socks-menu，选 1 粘贴 SOCKS5 自动部署 TCP + TUIC；旧中转选 19，凭据查看选 16。'
+    echo '安装完成。执行 sb1 打开菜单，选 1 粘贴 SOCKS5 自动部署 TCP + TUIC；旧中转选 19，凭据查看选 16。'
 fi

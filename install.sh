@@ -4,7 +4,7 @@ set -Eeuo pipefail
 trap 'echo "错误：安装步骤失败，请检查上方的软件源、网络或文件权限错误。" >&2' ERR
 umask 077
 REPO='youqishi1/socks5-relay-manager'
-REF="${SOCKS_REPO_REF:-v1.2.1}"
+REF="${SOCKS_REPO_REF:-v1.2.2}"
 CORE_COMMIT='da99424eac4092e3722f1a5b1844cfe80478f580'
 CORE_SHA256='9541e866d9ce04d051b07aa7b7c23bf717c5bc5ef7a9f07963e31a139038faeb'
 CORE_VERSION='0.9.9.0'
@@ -26,6 +26,12 @@ fi
 if (( EUID != 0 )); then
     echo '错误：请以 root 运行安装命令。' >&2
     exit 1
+fi
+if [[ -e /usr/local/bin/sb1 || -L /usr/local/bin/sb1 ]]; then
+    if [[ ! -L /usr/local/bin/sb1 || $(readlink /usr/local/bin/sb1) != /usr/local/bin/socks-menu ]]; then
+        echo '错误：/usr/local/bin/sb1 已被其他程序占用，拒绝覆盖。' >&2
+        exit 1
+    fi
 fi
 if [[ ! -f /etc/os-release ]]; then
     echo '错误：无法识别系统版本。' >&2
@@ -297,7 +303,10 @@ printf '%s\n' "$CORE_VERSION" >"$APP/core-version"
 chmod 600 "$APP/core-version"
 printf '%s\n' "$ACCESS_VERSION" >"$APP/access-version"
 chmod 600 "$APP/access-version"
+if [[ ! -L /usr/local/bin/sb1 ]]; then
+    ln -s /usr/local/bin/socks-menu /usr/local/bin/sb1
+fi
 completed=1
-echo '安装成功！执行 socks-menu，选 1 粘贴完整 SOCKS5 自动生成加密 TCP + TUIC；选 16 随时查看凭据。'
+echo '安装成功！执行 sb1 打开菜单，选 1 粘贴完整 SOCKS5 自动生成加密 TCP + TUIC；选 16 随时查看凭据。'
 echo '已有旧版中转：选 19 启用双模式；选 18 导出 Clash Verge/v2rayN 客户端文件。'
 echo '未修改 SSH、防火墙、云安全组或已有 TUIC 服务。'

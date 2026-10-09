@@ -14,10 +14,10 @@ TCP 使用 Shadowsocks 2022，TUIC 使用 QUIC/TLS。两种入口共用公网端
 以 root 登录，普通用户先 `sudo -i`，再复制一整行：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.2.1/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.2.2/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
 ```
 
-固定版本安装包先校验 SHA-256，再执行安装。交互终端安装后自动打开菜单，以后执行 `sudo socks-menu`。没有 curl 时先安装 `curl ca-certificates`。下载源码后在源码目录执行 `bash install.sh --local`。
+固定版本安装包先校验 SHA-256，再执行安装。交互终端安装后自动打开菜单，以后 root 输入 `sb1`，普通用户输入 `sudo sb1`。原命令 `socks-menu` 继续可用。若 `/usr/local/bin/sb1` 已被其他程序占用，安装器拒绝覆盖。没有 curl 时先安装 `curl ca-certificates`。下载源码后在源码目录执行 `bash install.sh --local`。
 
 支持完整 systemd 的 Ubuntu 22.04/24.04、Debian 12/13；安装时需要访问发行版源、GitHub。项目专用核心是 3proxy 0.9.9.0、sing-box 1.14.2，官方源固定校验，不改动已有 TUIC/VLESS/sing-box 服务。不使用面板、Xray 或 Docker。架构支持 x86_64、aarch64、armv7l、i686、riscv64，实际验证范围见 [测试说明](docs/TESTING.md)。
 
