@@ -31,6 +31,7 @@
 19. systemd 启动器只读加载配置，不修改被沙箱保护的目录。
 20. 回滚遇到持续故障时保留事务，菜单退出，避免不受控的重试循环。
 21. Linux 上已关闭连接的 TIME_WAIT 不妨碍端口复用；正在监听的服务仍被排除。
+22. 从本机网卡检测 VPS 公网地址；没有直接访问外部 IP 检测站，NAT 地址提示手动输入。
 
 `tests/test-install.sh` 在可丢弃 Ubuntu 主机上安装程序；`tests/test_systemd.py` 使用真正的 systemd 服务验证：
 

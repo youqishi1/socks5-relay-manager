@@ -540,9 +540,30 @@ def new_row(manager, previous=None):
     return row
 
 
+def vps_address(row):
+    if row['bind'] != '0.0.0.0':
+        return row['bind']
+    try:
+        result = subprocess.run(['ip', '-j', '-4', 'addr', 'show', 'scope', 'global'],
+                                capture_output=True, text=True, timeout=5)
+        for interface in json.loads(result.stdout):
+            for item in interface.get('addr_info', []):
+                address = ipaddress.ip_address(item.get('local', ''))
+                if address.version == 4 and address.is_global:
+                    return str(address)
+    except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
 def show_connection(row):
-    # No public-IP probe over direct HTTP. Explicit user-supplied advertised address.
-    address = ask('VPS 公网 IP/域名（仅用于显示连接信息）', row['bind'] if row['bind'] != '0.0.0.0' else '你的VPS公网IP')
+    # Detect local public IPv4 without any direct external HTTP/IP probe.
+    address = vps_address(row)
+    while not address:
+        try:
+            address = host(ask('未发现网卡公网 IPv4（可能使用 NAT），请输入 VPS 公网 IP/域名'))
+        except Error as exc:
+            print(str(exc))
     print('\n========================================\nSOCKS5 中转保存成功' + ('（已启用且出口验证成功）' if row['enabled'] else '（未启用）'))
     print('VPS 地址：' + address + '\nVPS 端口：' + str(row['port']))
     print('客户端账号：' + row['client_user'] + '\n客户端密码：' + row['client_password'])
@@ -595,7 +616,7 @@ def uninstall(manager):
 
 
 def menu(manager):
-    print('建议通过 WireGuard 等加密隧道使用；默认来源仅本机，可在添加/修改时指定客户端 IP。')
+    print('SOCKS5 本身不加密，请通过 WireGuard 等加密隧道使用；默认来源仅本机，可在添加/修改时指定客户端 IP。')
     while True:
         try:
             with manager.lock():

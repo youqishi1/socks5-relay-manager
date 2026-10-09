@@ -397,6 +397,7 @@ class RelayTests(unittest.TestCase):
         output = io.StringIO()
         # Windows has no flock; this case tests the menu and real relay path.
         with patch.object(self.manager, 'lock', side_effect=contextlib.nullcontext), \
+             patch.object(m, 'vps_address', return_value=None), \
              patch('builtins.input', side_effect=lambda _: next(answers)), \
              patch.object(m.getpass, 'getpass', return_value=PASSWORD), \
              contextlib.redirect_stdout(output):
@@ -453,6 +454,16 @@ class RelayTests(unittest.TestCase):
                 accepted.close()  # Server actively closes, entering TIME_WAIT.
                 self.assertEqual(client.recv(1), b'')
         self.assertEqual(self.manager.allocate(), port)
+
+    def test_22_vps_address_detection_uses_only_local_interfaces(self):
+        from types import SimpleNamespace
+        interfaces = '[{"addr_info":[{"local":"10.0.0.1"},{"local":"1.1.1.1"}]}]'
+        with patch.object(m.subprocess, 'run', return_value=SimpleNamespace(stdout=interfaces)) as run:
+            self.assertEqual(m.vps_address({'bind': '0.0.0.0'}), '1.1.1.1')
+            self.assertEqual(run.call_args.args[0], ['ip', '-j', '-4', 'addr', 'show', 'scope', 'global'])
+        self.assertEqual(m.vps_address({'bind': '10.10.0.1'}), '10.10.0.1')
+        with patch.object(m.subprocess, 'run', side_effect=FileNotFoundError):
+            self.assertIsNone(m.vps_address({'bind': '0.0.0.0'}))
 
 
 if __name__ == '__main__':

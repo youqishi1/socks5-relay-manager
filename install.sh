@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Private repositories: run through authenticated gh api, or clone then --local.
 set -Eeuo pipefail
+trap 'echo "错误：安装步骤失败，请检查上方的软件源、网络或文件权限错误。" >&2' ERR
 umask 077
 REPO='youqishi1/socks5-relay-manager'
 REF="${SOCKS_REPO_REF:-main}"
