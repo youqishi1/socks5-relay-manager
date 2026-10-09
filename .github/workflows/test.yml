@@ -86,4 +86,4 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y qemu-system-x86 qemu-utils genisoimage
       - name: Original CentOS 7 kernel and systemd integration
-        run: env RELAY_DISPOSABLE_HOST=YES bash tests/test-centos7-vm.sh
+        run: env RELAY_DISPOSABLE_HOST=YES RELAY_CENTOS_CACHE="$RUNNER_TEMP/relay-centos-runtime.tar.gz" bash tests/test-centos7-vm.sh

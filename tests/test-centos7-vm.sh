@@ -44,6 +44,12 @@ for (( i=0; i<120; i++ )); do
 done
 (( ready )) || { echo 'CentOS 虚拟机未能启动 SSH。' >&2; exit 1; }
 git ls-files -z | tar --null -T - -czf "$work/source.tar.gz"
+cache=${RELAY_CENTOS_CACHE:-}
+if [[ -n $cache && -f $cache && -f $cache.sha256 ]]; then
+    (cd "$(dirname "$cache")" && sha256sum -c "$(basename "$cache").sha256")
+    scp -i "$work/key" -P 22227 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+        -o "UserKnownHostsFile=$work/known_hosts" "$cache" root@127.0.0.1:/root/relay-ci-runtime.tar.gz
+fi
 scp -i "$work/key" -P 22227 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
     -o "UserKnownHostsFile=$work/known_hosts" "$work/source.tar.gz" root@127.0.0.1:/root/source.tar.gz
 ssh "${ssh_args[@]}" root@127.0.0.1 'bash -s' <<'GUEST'
@@ -63,14 +69,23 @@ systemctl --version | head -n 1
 [[ $(uname -r) == 3.10.* ]]
 [[ $(systemctl --version | head -n 1) == 'systemd 219' ]]
 sha256sum /usr/bin/python /usr/bin/openssl >/root/original-system-binaries.sha256
+if [[ -f /root/relay-ci-runtime.tar.gz ]]; then
+    mkdir -p /opt/socks5-relay-manager
+    tar -xzf /root/relay-ci-runtime.tar.gz -C /opt/socks5-relay-manager
+fi
 mkdir /root/source
 tar -xzf /root/source.tar.gz -C /root/source
 cd /root/source
 bash install.sh --local
+tar -czf /root/relay-ci-runtime.tar.gz -C /opt/socks5-relay-manager \
+    runtime-py3.12.15-ssl3.5.9 3proxy core-version
 sha256sum -c /root/original-system-binaries.sha256
 export RELAY_DISPOSABLE_HOST=YES
 /opt/socks5-relay-manager/python3 tests/test_systemd.py
-systemd-analyze verify /etc/systemd/system/socks-relay@.service /etc/systemd/system/socks-access@.service
+mkdir /root/relay-unit-check
+cp /etc/systemd/system/socks-relay@.service /root/relay-unit-check/socks-relay@20001.service
+cp /etc/systemd/system/socks-access@.service /root/relay-unit-check/socks-access@20001.service
+systemd-analyze verify /root/relay-unit-check/socks-relay@20001.service /root/relay-unit-check/socks-access@20001.service
 logrotate --debug /etc/logrotate.d/socks5-relay-manager
 export SINGBOX_BINARY=/opt/socks5-relay-manager/sing-box
 export OPENSSL_BINARY=/opt/socks5-relay-manager/runtime-py3.12.15-ssl3.5.9/ssl/bin/openssl
@@ -85,3 +100,8 @@ export MIHOMO_BINARY=/root/mihomo
 sha256sum -c /root/original-system-binaries.sha256
 echo 'PASS: CentOS 7 original 3.10 kernel, systemd 219, private runtime, SS/TUIC, repeat install and rollback'
 GUEST
+if [[ -n $cache ]]; then
+    scp -i "$work/key" -P 22227 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+        -o "UserKnownHostsFile=$work/known_hosts" root@127.0.0.1:/root/relay-ci-runtime.tar.gz "$cache"
+    (cd "$(dirname "$cache")" && sha256sum "$(basename "$cache")" >"$(basename "$cache").sha256")
+fi
