@@ -1,0 +1,12 @@
+/var/log/socks5-relay-manager/*.log {
+    daily
+    rotate 7
+    size 10M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    create 0600 root root
+    su root root
+}

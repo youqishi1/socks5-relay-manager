@@ -1,0 +1,11 @@
+.tools/
+__pycache__/
+*.pyc
+.coverage
+test-output/
+*.zip
+*.tar.gz
+relays.json
+*.backup.json
+*.log
+.env

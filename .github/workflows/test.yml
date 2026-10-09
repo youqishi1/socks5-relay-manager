@@ -1,0 +1,26 @@
+name: relay-tests
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bash syntax and ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          bash -n install.sh socks-menu.sh uninstall.sh tests/test-install.sh
+          shellcheck install.sh socks-menu.sh uninstall.sh tests/test-install.sh
+      - name: Fresh install, repeat install and real systemd
+        run: sudo env RELAY_DISPOSABLE_HOST=YES bash tests/test-install.sh
+      - name: Real core integration suite
+        run: sudo python3 tests/test_relay.py
