@@ -440,6 +440,20 @@ class RelayTests(unittest.TestCase):
         self.manager.recover()
         self.assertEqual(self.manager.verify(row)[0], '127.0.0.2')
 
+    @unittest.skipUnless(os.name == 'posix', 'Linux TIME_WAIT regression')
+    def test_21_time_wait_can_be_reused_but_live_listener_cannot(self):
+        port = self.manager.allocate()
+        with socket.socket() as listener:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind(('0.0.0.0', port))
+            listener.listen(1)
+            self.assertNotEqual(self.manager.allocate(), port)
+            with socket.create_connection(('127.0.0.1', port)) as client:
+                accepted, _ = listener.accept()
+                accepted.close()  # Server actively closes, entering TIME_WAIT.
+                self.assertEqual(client.recv(1), b'')
+        self.assertEqual(self.manager.allocate(), port)
+
 
 if __name__ == '__main__':
     if not BINARY.is_file():

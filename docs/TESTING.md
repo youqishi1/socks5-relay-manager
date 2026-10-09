@@ -30,6 +30,7 @@
 18. 错误客户端用户名的完整 CONNECT 请求被拒绝，目标收到零请求。
 19. systemd 启动器只读加载配置，不修改被沙箱保护的目录。
 20. 回滚遇到持续故障时保留事务，菜单退出，避免不受控的重试循环。
+21. Linux 上已关闭连接的 TIME_WAIT 不妨碍端口复用；正在监听的服务仍被排除。
 
 `tests/test-install.sh` 在可丢弃 Ubuntu 主机上安装程序；`tests/test_systemd.py` 使用真正的 systemd 服务验证：
 

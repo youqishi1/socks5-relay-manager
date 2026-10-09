@@ -370,8 +370,12 @@ class Manager:
                 continue
             try:
                 with socket.socket() as sock:
-                    # Don't use SO_REUSEADDR; also catches a wildcard listener.
+                    if os.name == 'posix':
+                        # Ignore old TIME_WAIT sockets, but never set SO_REUSEPORT.
+                        # listen() still rejects any existing live listener.
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                     sock.bind(('0.0.0.0', port))
+                    sock.listen(1)
                 return port
             except OSError:
                 continue
