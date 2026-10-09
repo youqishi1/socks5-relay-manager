@@ -1,6 +1,8 @@
 """Integration tests use REAL 3proxy and authenticated, forwarding SOCKS5 servers."""
 import copy
+import contextlib
 import importlib.util
+import io
 import os
 from pathlib import Path
 import select
@@ -384,6 +386,33 @@ class RelayTests(unittest.TestCase):
         with self.assertRaises(m.Error):
             self.manager.apply({row['port']: row})
         self.assertEqual(self.manager.pointers(), {})
+        self.assertEqual(self.target.hits, [])
+
+    def test_17_chinese_menu_add_view_test_exit(self):
+        upstream = self.upstream()
+        port = self.manager.allocate()
+        answers = iter(['1', '127.0.0.1', str(upstream.server_address[1]), upstream.user,
+                        'n', '127.0.0.1', '0.0.0.0', '', 'vps.example.com',
+                        '2', '6', str(port), '0'])
+        output = io.StringIO()
+        # Windows has no flock; this case tests the menu and real relay path.
+        with patch.object(self.manager, 'lock', side_effect=contextlib.nullcontext), \
+             patch('builtins.input', side_effect=lambda _: next(answers)), \
+             patch.object(m.getpass, 'getpass', return_value=PASSWORD), \
+             contextlib.redirect_stdout(output):
+            m.menu(self.manager)
+        text = output.getvalue()
+        self.assertIn('SOCKS5 中转保存成功', text)
+        self.assertIn('客户端密码：', text)
+        self.assertIn('vps.example.com:' + str(port) + ':client', text)
+        self.assertIn('出口 IP 127.0.0.2', text)
+        self.assertEqual(len(self.manager.rows()), 1)
+
+    def test_18_wrong_client_username_has_no_target_request(self):
+        row = self.add()
+        self.target.hits.clear()
+        with self.assertRaises(m.Error):
+            m.health('127.0.0.1', row['port'], 'wrong-client', row['client_password'], self.manager.ip_url)
         self.assertEqual(self.target.hits, [])
 
 

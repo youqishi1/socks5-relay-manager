@@ -26,6 +26,8 @@
 14. 多端口恢复失败后的全体回滚。
 15. 来源 ACL 拒绝非授权客户端。
 16. 错误上游用户名不能创建启用端口。
+17. 中文菜单完整添加、查看、检测、退出流程及连接信息展示。
+18. 错误客户端用户名的完整 CONNECT 请求被拒绝，目标收到零请求。
 
 `tests/test-install.sh` 在可丢弃 Ubuntu 主机上安装程序；`tests/test_systemd.py` 使用真正的 systemd 服务验证：
 
@@ -38,6 +40,7 @@
 - 配置/备份/日志权限，日志不包含凭据。
 - 损坏新版 unit 的安装失败回退旧版本、核心和服务。
 - `systemd-analyze verify` 和 `logrotate --debug`。
+- 通过 GitHub 临时只读令牌认证的私有仓库一条命令安装路径。
 
 安装测试只能在可丢弃主机执行，必须设定 `RELAY_DISPOSABLE_HOST=YES`，因为会操作真正的项目系统路径。
 

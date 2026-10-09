@@ -24,3 +24,9 @@ jobs:
         run: sudo env RELAY_DISPOSABLE_HOST=YES bash tests/test-install.sh
       - name: Real core integration suite
         run: sudo python3 tests/test_relay.py
+      - name: Authenticated private-repository one-command bootstrap
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOCKS_REPO_REF: ${{ github.sha }}
+        run: |
+          sudo --preserve-env=GH_TOKEN,SOCKS_REPO_REF bash -c 'bash <(gh api -H "Accept: application/vnd.github.raw+json" "repos/youqishi1/socks5-relay-manager/contents/install.sh?ref=$SOCKS_REPO_REF")'
