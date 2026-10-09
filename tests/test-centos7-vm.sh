@@ -90,8 +90,8 @@ logrotate --debug /etc/logrotate.d/socks5-relay-manager
 export SINGBOX_BINARY=/opt/socks5-relay-manager/sing-box
 export OPENSSL_BINARY=/opt/socks5-relay-manager/runtime-py3.12.15-ssl3.5.9/ssl/bin/openssl
 curl --proto '=https' --tlsv1.2 -fsSL --max-time 180 \
-    https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-amd64-v1.19.32.gz -o /root/mihomo.gz
-echo '8451100836c9eda194331c2babfad490b2faf30cebc1a04b0e76fd8ac2d35d10  /root/mihomo.gz' | sha256sum -c -
+    https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-amd64-v1-v1.19.32.gz -o /root/mihomo.gz
+echo '306f81e723e60ce6b828899a6fe83e1d00e9ecefb2dc8d4d849312a5bc00efdc  /root/mihomo.gz' | sha256sum -c -
 gzip -d /root/mihomo.gz
 chmod 700 /root/mihomo
 export MIHOMO_BINARY=/root/mihomo
