@@ -7,6 +7,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent))
 from test_relay import m, serve, Target, Upstream, PASSWORD
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+import access
 
 if os.geteuid() != 0 or os.environ.get('RELAY_DISPOSABLE_HOST') != 'YES':
     raise SystemExit('只允许在明确标记的可丢弃 root 测试主机运行。')
@@ -23,12 +25,20 @@ try:
             row = dict(port=manager.allocate(), upstream_host='127.0.0.1', upstream_port=upstream.server_address[1],
                        upstream_user=upstream.user, upstream_password=PASSWORD, client_user='systemd' + str(i),
                        client_password=PASSWORD, sources=['127.0.0.1'], bind='0.0.0.0', enabled=True)
+            if i == 1:
+                row['bind'] = '127.0.0.1'
+                row['access'] = access.generate(rows, row['port'])
             manager.apply({row['port']: row})
             rows.append(row)
     print('PASS: real systemd startup and relay exit verification', flush=True)
     for row in rows:
         subprocess.run(['systemctl', 'is-enabled', '--quiet', manager.backend.unit(row['port'])], check=True)
         assert manager.verify(row)[0] == '127.0.0.2'
+    dual = rows[1]
+    dual_unit = 'socks-access@' + str(dual['port']) + '.service'
+    subprocess.run(['systemctl', 'is-enabled', '--quiet', dual_unit], check=True)
+    assert manager.backend.owns_listener(dual['access']['port'], unit=dual_unit, both=True)
+    print('PASS: actual encrypted TCP + TUIC service, boot enablement, TCP/UDP listener ownership', flush=True)
     original = manager.pointers()
     subprocess.run(['bash', 'install.sh', '--local'], check=True)
     assert manager.pointers() == original
@@ -37,9 +47,11 @@ try:
     print('PASS: repeated installation preserves credentials and active revisions', flush=True)
     survivor_unit = manager.backend.unit(rows[1]['port'])
     survivor_pid = subprocess.check_output(['systemctl', 'show', survivor_unit, '--property=MainPID', '--value'])
+    front_pid = subprocess.check_output(['systemctl', 'show', dual_unit, '--property=MainPID', '--value'])
     with manager.lock():
         manager.apply({rows[0]['port']: None})
     assert subprocess.check_output(['systemctl', 'show', survivor_unit, '--property=MainPID', '--value']) == survivor_pid
+    assert subprocess.check_output(['systemctl', 'show', dual_unit, '--property=MainPID', '--value']) == front_pid
     print('PASS: single deletion preserves other service PID', flush=True)
     with manager.lock():
         bad = copy.deepcopy(rows[1])
@@ -63,6 +75,16 @@ try:
     else:
         raise AssertionError('systemd did not restart crashed process')
     print('PASS: systemd automatic crash restart', flush=True)
+    assert manager.backend.owns_listener(dual['access']['port'], unit=dual_unit, both=True)
+    subprocess.run(['systemctl', 'kill', '--signal=SIGKILL', dual_unit], check=True)
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if manager.backend.owns_listener(dual['access']['port'], unit=dual_unit, both=True):
+            break
+        time.sleep(.5)
+    else:
+        raise AssertionError('dual service did not restart')
+    print('PASS: dual service survives inner core restart and recovers from its own crash', flush=True)
     for row in manager.rows():
         manager.backend.apply(row['port'], None)
     # New management process and state load, then systemd restart. This is not a VPS reboot.

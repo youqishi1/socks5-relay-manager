@@ -77,6 +77,21 @@ THREEPROXY_BINARY=/path/to/3proxy python3 tests/test_clients.py
 
 公开仓库发布后，还要用匿名方式验证 raw 入口、Release 安装包和 SHA-256 一致，并在 Ubuntu CI 上执行 `start.sh`。真实青岛到 VPS 的线路、公网吞吐、现有 TUIC 的本机访问规则仍需目标部署验证；本地成功不代表已经测到公网提速。
 
+## v1.2.0 自动双模式验证
+
+`tests/test_access.py` 使用真正的项目双模式服务配置：Shadowsocks 2022 TCP 和 TUIC UDP → 独立 3proxy → 两个认证 SOCKS5 上游。Mihomo 和 sing-box 两种客户端分别测试 TCP/TUIC，返回实际连接来源，删除单出口不改变另一入口 PID，故障请求不会直连目标。
+
+还检查整条 SOCKS5 URL/IPv6/冒号密码、控制字符拒绝、一个输入自动生成凭据、中文菜单默认添加与凭据查看、私有文件、不包含供应商凭据和私钥、错误证书指纹/信任、错误传输密码、上游失败后双服务回滚。
+
+v2rayN 的内部链接按官方 InnerFmt ConfigVersion 4 编码，保存证书信任；测试解码字段，并按官方 TUIC/TLS 核心字段生成真实 sing-box 连接。未声称自动操作过 v2rayN 图形界面。旧版客户端提供自定义 JSON 文件作为兼容导入方式。
+
+systemd 套件新增双服务开机启用、TCP/UDP 两种监听所有权、内部核心崩溃时入口保留、入口自身崩溃后恢复，以及包含双模式数据的重复安装和安装回滚验证。公开安装 CI 从固定 Release 下载，已设置可丢弃主机守卫变量。
+
+```bash
+SINGBOX_BINARY=/path/to/sing-box MIHOMO_BINARY=/path/to/mihomo \
+THREEPROXY_BINARY=/path/to/3proxy python3 tests/test_access.py
+```
+
 ## 尚需真实部署验证
 
 - Debian 12/13 的全新完整系统安装及 systemd 启动。

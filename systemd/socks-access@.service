@@ -1,0 +1,33 @@
+[Unit]
+Description=Encrypted TCP and TUIC entrances for relay %i
+After=network-online.target socks-relay@%i.service
+Wants=network-online.target
+Wants=socks-relay@%i.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/socks5-relay-manager/current/scripts/manager.py access-run %i
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+LimitNOFILE=65536
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+ReadWritePaths=/var/log/socks5-relay-manager
+StandardOutput=null
+StandardError=append:/var/log/socks5-relay-manager/access-%i.log
+
+[Install]
+WantedBy=multi-user.target

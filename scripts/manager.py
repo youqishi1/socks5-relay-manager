@@ -105,7 +105,7 @@ def host(value):
 def validate(row):
     fields = {'port', 'upstream_host', 'upstream_port', 'upstream_user', 'upstream_password',
               'client_user', 'client_password', 'sources', 'bind', 'enabled'}
-    if not isinstance(row, dict) or set(row) - fields - {'resolved_ip'} or fields - set(row):
+    if not isinstance(row, dict) or set(row) - fields - {'resolved_ip', 'access'} or fields - set(row):
         raise Error('配置字段不完整或含有未知字段。')
     for key, low, high in [('port', FIRST, LAST), ('upstream_port', 1, 65535)]:
         if type(row[key]) is not int or not low <= row[key] <= high:
@@ -142,6 +142,14 @@ def validate(row):
                 raise ValueError()
         except ValueError as exc:
             raise Error('解析后的上游地址无效。') from exc
+    if row.get('access') is not None:
+        from access import AccessError, validate as validate_access
+        try:
+            validate_access(row['access'])
+        except AccessError as exc:
+            raise Error(str(exc)) from None
+        if row['bind'] != '127.0.0.1':
+            raise Error('双模式中转的 3proxy 仅允许监听 127.0.0.1。')
     return row
 
 
@@ -289,29 +297,51 @@ class Systemd:
         return result.returncode == 0
 
     def apply(self, port, row):
+        access_unit = 'socks-access@' + str(port) + '.service'
+        has_access_unit = Path('/etc/systemd/system/socks-access@.service').exists()
+        if has_access_unit:
+            self.call('stop', access_unit, required=False)
         if row and row['enabled']:
             self.call('enable', self.unit(port))
             self.call('restart', self.unit(port))
             deadline = time.monotonic() + 7
             while time.monotonic() < deadline:
                 if self.active(port) and self.owns_listener(port):
-                    return
+                    break
                 time.sleep(0.1)
-            raise Error('服务启动失败或端口未监听。')
+            else:
+                raise Error('服务启动失败或端口未监听。')
+            if row.get('access'):
+                self.call('enable', access_unit)
+                self.call('restart', access_unit)
+                deadline = time.monotonic() + 8
+                while time.monotonic() < deadline:
+                    if self.call('is-active', '--quiet', access_unit, required=False) and self.owns_listener(row['access']['port'], unit=access_unit, both=True):
+                        return
+                    time.sleep(0.1)
+                raise Error('双模式入口未正常启动。')
+            if has_access_unit:
+                self.call('disable', access_unit, required=False)
         else:
             self.call('stop', self.unit(port))
             self.call('disable', self.unit(port), required=False)
+            if has_access_unit:
+                self.call('disable', access_unit, required=False)
 
     def active(self, port):
         return self.call('is-active', '--quiet', self.unit(port), required=False)
 
-    def owns_listener(self, port):
+    def owns_listener(self, port, unit=None, both=False):
         # A different process occupying the port must not satisfy startup checks.
-        pid = subprocess.run(['systemctl', 'show', self.unit(port), '--property=MainPID', '--value'],
+        pid = subprocess.run(['systemctl', 'show', unit or self.unit(port), '--property=MainPID', '--value'],
                              capture_output=True, text=True, timeout=5).stdout.strip()
         sockets = subprocess.run(['ss', '-H', '-lntp', 'sport = :' + str(port)],
                                  capture_output=True, text=True, timeout=5).stdout
-        return pid.isdecimal() and pid != '0' and re.search(r'pid=' + pid + r'[,)]', sockets) is not None
+        found = pid.isdecimal() and pid != '0' and re.search(r'pid=' + pid + r'[,)]', sockets) is not None
+        if both and found:
+            udp = subprocess.run(['ss', '-H', '-lnup', 'sport = :' + str(port)], capture_output=True, text=True, timeout=5).stdout
+            found = re.search(r'pid=' + pid + r'[,)]', udp) is not None
+        return found
 
 
 def listening(port, bind='0.0.0.0'):
@@ -323,10 +353,11 @@ def listening(port, bind='0.0.0.0'):
 
 
 class Manager:
-    def __init__(self, root=ROOT, log=LOG, binary=BINARY, backend=None, ip_url=IP_URL, readonly=False):
+    def __init__(self, root=ROOT, log=LOG, binary=BINARY, backend=None, ip_url=IP_URL, readonly=False, access_binary=APP / 'sing-box'):
         self.root, self.log, self.binary = Path(root), Path(log), Path(binary)
         self.backend = backend or Systemd()
         self.ip_url = ip_url
+        self.access_binary = Path(access_binary)
         if not readonly:
             private_dir(self.root)
             private_dir(self.log)
@@ -434,7 +465,18 @@ class Manager:
             write_json(directory / 'relay.json', row)
             if row['enabled']:
                 atomic(directory / '3proxy.cfg', render(row, self.log))
-                for kind in ('relay', 'service'):
+                if row.get('access'):
+                    from access import render as render_access
+                    atomic(directory / 'certificate.pem', row['access']['certificate'])
+                    atomic(directory / 'private-key.pem', row['access']['private_key'])
+                    atomic(directory / 'access.json', render_access(row, directory))
+                    try:
+                        result = subprocess.run([str(self.access_binary), 'check', '-c', str(directory / 'access.json')], capture_output=True, timeout=15)
+                    except (OSError, subprocess.TimeoutExpired):
+                        raise Error('双模式核心未安装或配置验证超时。') from None
+                    if result.returncode:
+                        raise Error('双模式入口配置检查失败；原中转未变。')
+                for kind in ('relay', 'service', 'access'):
                     log = self.log / (kind + '-' + str(port) + '.log')
                     log.touch(mode=0o600, exist_ok=True)
                     os.chmod(log, 0o600)
@@ -481,6 +523,19 @@ class Manager:
             raise Error('生成配置与保存数据不一致，拒绝启动。')
         os.execv(str(self.binary), [str(self.binary), str(config)])
 
+    def run_access(self, port):
+        from access import render as render_access
+        row = self.row(port)
+        if not row['enabled'] or not row.get('access'):
+            raise Error('双模式入口未启用。')
+        directory = self.revision(port, read_json(self.pointer_path(port)))
+        config = directory / 'access.json'
+        if config.read_text(encoding='utf-8') != render_access(row, directory):
+            raise Error('双模式配置与保存数据不一致，拒绝启动。')
+        if (directory / 'private-key.pem').read_text() != row['access']['private_key'] or (directory / 'certificate.pem').read_text() != row['access']['certificate']:
+            raise Error('双模式证书与保存数据不一致，拒绝启动。')
+        os.execv(str(self.access_binary), [str(self.access_binary), 'run', '-c', str(config)])
+
 
 def ask(prompt, default=None):
     value = input(prompt + ((' [' + str(default) + ']') if default is not None else '') + '：').strip()
@@ -499,8 +554,57 @@ def number(prompt, default=None):
     return int(value)
 
 
+def parse_upstream(value):
+    """A complete provider line; never include it in exception messages."""
+    from urllib.parse import unquote, urlsplit
+    try:
+        if not isinstance(value, str) or any(ord(char) < 32 or ord(char) == 127 for char in value):
+            raise ValueError()
+        if value.startswith(('socks5://', 'socks5h://')):
+            url = urlsplit(value)
+            if url.path not in ('', '/') or url.query or url.fragment or not url.username or url.password is None:
+                raise ValueError()
+            address, port, user, password = url.hostname, url.port, unquote(url.username), unquote(url.password)
+        else:
+            if value.startswith('['):
+                end = value.index(']:')
+                address = value[1:end]
+                port, user, password = value[end + 2:].split(':', 2)
+            else:
+                address, port, user, password = value.split(':', 3)
+            port = int(port)
+        if not isinstance(port, int) or not 1 <= port <= 65535:
+            raise ValueError()
+        address = host(address)
+        credential(user, '上游账号')
+        credential(password, '上游密码')
+        if user == '*':
+            raise ValueError()
+        return dict(upstream_host=address, upstream_port=port, upstream_user=user, upstream_password=password)
+    except (Error, ValueError, TypeError, AttributeError):
+        raise Error('整条 SOCKS5 格式无效。使用 IP:端口:账号:密码，或 socks5://账号:密码@IP:端口；IPv6 用 [地址]:端口:账号:密码。') from None
+
+
+def pasted_row(manager, previous=None):
+    old = previous or {}
+    row = parse_upstream(getpass.getpass('粘贴整条 SOCKS5 信息（隐藏输入，密码中的冒号保留）：'))
+    port = old.get('port') or manager.allocate()
+    row.update(port=port, client_user=old.get('client_user', 'client' + str(port - FIRST + 1).zfill(2)),
+               client_password=old.get('client_password', secrets.token_urlsafe(24)),
+               sources=old.get('sources', ['127.0.0.1']), bind=old.get('bind', '127.0.0.1'), enabled=True)
+    if old.get('access'):
+        row['access'] = copy.deepcopy(old['access'])
+    validate(row)
+    print('正在检测上游代理...')
+    row['resolved_ip'] = resolve(row['upstream_host'])
+    exit_ip, duration = health(row['resolved_ip'], row['upstream_port'], row['upstream_user'], row['upstream_password'], manager.ip_url)
+    print('上游连接成功！出口 IP：' + exit_ip + '，完整出口检测耗时 ' + str(duration) + ' ms（不是 ping）。')
+    return row
+
+
 def new_row(manager, previous=None, local_tuic=False):
     old = previous or {}
+    local_tuic = local_tuic or bool(old.get('access'))
     port = old.get('port') or manager.allocate()
     row = {'port': port,
            'upstream_host': host(ask('请输入上游 SOCKS5 IP/域名', old.get('upstream_host'))),
@@ -517,12 +621,14 @@ def new_row(manager, previous=None, local_tuic=False):
         row['client_password'] = old.get('client_password', secrets.token_urlsafe(24))
     if local_tuic:
         row['sources'], row['bind'] = ['127.0.0.1'], '127.0.0.1'
-        print('TUIC 加速模式：仅监听 VPS 本机，不需要开放 SOCKS5 公网端口。')
+        print('内部中转仅监听 VPS 本机，不需要开放原生 SOCKS5 公网端口。')
     else:
         sources = ask('允许来源 IPv4/CIDR（逗号分隔；* 允许公网，默认仅本机）', ','.join(old.get('sources', ['127.0.0.1'])))
         row['sources'] = [x.strip() for x in sources.split(',')]
         row['bind'] = ask('监听 IPv4（可填 WireGuard 地址）', old.get('bind', '0.0.0.0'))
     row['enabled'] = True
+    if old.get('access'):
+        row['access'] = copy.deepcopy(old['access'])
     validate(row)
     if '*' in row['sources']:
         print('警告：SOCKS5 本身不加密，公网传输会暴露账号密码和流量。建议通过 WireGuard 访问，并限制来源 IP。')
@@ -532,7 +638,7 @@ def new_row(manager, previous=None, local_tuic=False):
     try:
         row['resolved_ip'] = resolve(row['upstream_host'])
         exit_ip, latency = health(row['resolved_ip'], row['upstream_port'], row['upstream_user'], row['upstream_password'], manager.ip_url)
-        print('上游连接成功！出口 IP：' + exit_ip + '，耗时 ' + str(latency) + ' ms')
+        print('上游连接成功！出口 IP：' + exit_ip + '，完整出口检测耗时 ' + str(latency) + ' ms（不是 ping）。')
     except Error as exc:
         print(str(exc))
         if not confirm('上游不可用，是否保存为未启用状态？'):
@@ -560,7 +666,86 @@ def vps_address(row):
     return None
 
 
-def show_connection(row):
+def public_address(manager):
+    path = manager.root / 'public-address.json'
+    if path.exists():
+        return host(read_json(path)['address'])
+    address = vps_address({'bind': '0.0.0.0'})
+    if not address:
+        # NAT hosts need an address discovery request. No credentials are sent.
+        env = {k: v for k, v in os.environ.items() if k.lower() not in {'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy'}}
+        try:
+            result = subprocess.run(['curl', '-q', '--silent', '--fail', '--noproxy', '*', '--proto', '=https',
+                                     '--max-time', '8', '--max-filesize', '128', IP_URL], capture_output=True, text=True, timeout=10, env=env)
+            candidate = ipaddress.ip_address(result.stdout.strip())
+            if result.returncode == 0 and candidate.is_global:
+                address = str(candidate)
+        except (ValueError, OSError, subprocess.TimeoutExpired):
+            pass
+    if not address:
+        raise Error('无法自动识别 VPS 公网地址。菜单 20 设置公网 IP/域名后重新导出；已保存的中转不受影响。')
+    write_json(path, {'address': address})
+    return address
+
+
+def export_dual(manager):
+    from access import AccessError, configs
+    try:
+        files = configs(manager.rows(), public_address(manager))
+    except AccessError as exc:
+        raise Error(str(exc)) from None
+    directory = manager.root / 'exports' / 'dual'
+    for name, contents in files.items():
+        atomic(directory / name, contents)
+    atomic(directory / '使用说明.txt', '\n'.join([
+        '加密 TCP + TUIC 使用说明',
+        '通过 SSH/SFTP 下载本目录，配置含客户端凭据，勿公开或上传共享。',
+        'Clash Verge：导入本地 clash-dual.yaml 并启用；每个出口的模式列表可选 TUIC 或 TCP。',
+        'v2rayN：复制 v2rayN-一键导入.txt 的全部内容，从剪贴板导入两种模式。TUIC 使用保留证书的内部分享格式，需支持 ConfigVersion 4。',
+        '旧版 v2rayN 不支持内部链接时，TUIC 添加自定义配置，选择 v2rayn-tuic.json，核心选择 sing-box 1.14.2 或兼容更新版，Socks 端口留空，再启用。',
+        'v2rayN 自定义配置的本地 SOCKS5 端口及账号密码见连接信息.txt。只有导入 ss:// 单节点时，本地端口沿用 v2rayN 设置。',
+        '同一套多端口配置只运行一个客户端，避免本机端口冲突。新增、删除或改密码后，菜单 18 重新导出并导入。',
+        'TUIC 证书在文件内验证，不需要购买域名，不关闭证书验证；私钥保留在 VPS，未包含在客户端文件中。',
+        '公网入口同时需要允许对应 TCP 和 UDP 端口。云安全组由服务商控制；本程序不关闭防火墙或更改现有服务。',
+        '电脑 → 加密 TCP 或 TUIC → VPS 本机 3proxy → 固定上游 SOCKS5 → 网站；没有直连回退。',
+        '应用 UDP 转发不启用。TUIC 使用 UDP 传输 TCP 请求。真实速度需要在青岛客户端用同一下载目标对比。',
+        '']))
+    print('客户端文件已生成：' + str(directory) + '（仅 root 可读）')
+    print('Clash Verge 导入 clash-dual.yaml；v2rayN 的 TCP 分享链接及 TUIC 导入说明见连接信息.txt。')
+    return directory
+
+
+def enable_dual(manager, row):
+    from access import AccessError, generate
+    if not manager.access_binary.is_file():
+        raise Error('双模式核心尚未安装，请先运行新版一键安装命令。')
+    row = copy.deepcopy(row)
+    row['bind'], row['sources'] = '127.0.0.1', ['127.0.0.1']
+    row['enabled'] = True
+    if not row.get('access'):
+        try:
+            row['access'] = generate(manager.rows(), row['port'])
+        except AccessError as exc:
+            raise Error(str(exc)) from None
+    manager.apply({row['port']: row})
+    export_dual(manager)
+    show_connection(row, manager)
+
+
+def show_connection(row, manager=None):
+    if row.get('access'):
+        from access import configs
+        address = public_address(manager) if manager else vps_address({'bind': '0.0.0.0'})
+        if not address:
+            raise Error('尚未识别 VPS 公网地址，请设置后重新查看。')
+        front = row['access']
+        print('\n双模式入口：' + address + ':' + str(front['port']) + '（TCP + UDP）')
+        print('内部中转编号：' + str(row['port']) + '；本机账号：' + row['client_user'] + '；本机密码：' + row['client_password'])
+        print('TUIC UUID：' + front['uuid'] + '\nTUIC 密码：' + front['tuic_password'])
+        if row['enabled']:
+            print(configs([row], address)['连接信息.txt'])
+        print('请允许云安全组/防火墙中的 ' + str(front['port']) + '/TCP 和 ' + str(front['port']) + '/UDP；不要开放内部中转端口。')
+        return
     # Detect local public IPv4 without any direct external HTTP/IP probe.
     address = vps_address(row)
     while not address:
@@ -623,6 +808,15 @@ def show_rows(manager):
               + ' | 客户端 ' + row['client_user'] + ' | ' + ('启用' if row['enabled'] else '停用')
               + ' | 服务 ' + ('运行中' if manager.backend.active(row['port']) else '未运行')
               + ' | 监听 ' + ('是' if listening(row['port'], row['bind']) else '否'))
+        if row.get('access'):
+            front = row['access']['port']
+            active = manager.backend.call('is-active', '--quiet', 'socks-access@' + str(row['port']) + '.service', required=False)
+            owns = manager.backend.owns_listener(front, unit='socks-access@' + str(row['port']) + '.service', both=True)
+            print('   加密 TCP + TUIC 公网端口 ' + str(front) + ' | 双模式服务 ' + ('运行中' if active else '未运行') + ' | TCP/UDP 监听 ' + ('是' if owns else '否'))
+        else:
+            print('   允许来源：' + ','.join(row['sources']) + ' | 绑定地址：' + row['bind'])
+            if row['bind'] == '127.0.0.1' or row['sources'] == ['127.0.0.1']:
+                print('   仅本机可访问，电脑不能直接连接此 SOCKS5；菜单 19 启用双模式。')
 
 
 def test_row(manager, row):
@@ -631,7 +825,7 @@ def test_row(manager, row):
         return
     try:
         ip, latency = manager.verify(row)
-        print('端口 ' + str(row['port']) + ' | 出口 IP ' + ip + ' | 连接成功 | ' + str(latency) + ' ms')
+        print('端口 ' + str(row['port']) + ' | 出口 IP ' + ip + ' | 连接成功 | 出口查询总耗时 ' + str(latency) + ' ms（VPS测量，不是青岛线路ping）')
     except Error as exc:
         print('端口 ' + str(row['port']) + ' | 连接失败 | ' + str(exc))
 
@@ -644,7 +838,7 @@ def uninstall(manager):
         manager.backup()
         for row in manager.rows():
             manager.backend.apply(row['port'], None)
-    for path in (Path('/etc/systemd/system/socks-relay@.service'), Path('/etc/logrotate.d/socks5-relay-manager'),
+    for path in (Path('/etc/systemd/system/socks-relay@.service'), Path('/etc/systemd/system/socks-access@.service'), Path('/etc/logrotate.d/socks5-relay-manager'),
                  Path('/usr/local/bin/socks-menu'), Path('/usr/local/bin/socks-relay-uninstall')):
         path.unlink(missing_ok=True)
     subprocess.run(['systemctl', 'daemon-reload'], check=True)
@@ -655,7 +849,7 @@ def uninstall(manager):
 
 
 def menu(manager):
-    print('已有同台 VPS 的 TUIC？选择 15 添加本机中转，再选 14 导出加速配置。SOCKS5 公网直连本身不加密。')
+    print('推荐：选 1，粘贴整条 SOCKS5，自动部署加密 TCP + TUIC。选 16 随时查看账号密码，选 18 导出客户端文件。')
     while True:
         try:
             with manager.lock():
@@ -665,7 +859,7 @@ def menu(manager):
             state = '运行中' if enabled and running == len(enabled) else ('部分运行/异常' if running else '未运行/暂无启用代理')
             print('\n========================================\n        SOCKS5 中转管理系统\n========================================')
             print('系统状态：' + state + '\n代理数量：' + str(len(rows)) + '\n端口范围：20001-29999')
-            print('1. 添加 SOCKS5 中转\n2. 查看全部中转\n3. 删除 SOCKS5 中转\n4. 修改 SOCKS5 中转\n5. 检测所有代理出口 IP\n6. 检测指定代理\n7. 重启代理服务\n8. 查看运行状态\n9. 查看日志\n10. 备份配置\n11. 恢复配置\n12. 更新程序\n13. 卸载程序\n14. 导出 TUIC 加速客户端配置\n15. 添加 TUIC 加速用的本机中转\n0. 退出')
+            print('1. 一键添加加密 TCP + TUIC（粘贴整条 SOCKS5）\n2. 查看全部中转\n3. 删除 SOCKS5 中转\n4. 修改 SOCKS5 中转\n5. 检测所有代理出口 IP\n6. 检测指定代理\n7. 重启代理服务\n8. 查看运行状态\n9. 查看日志\n10. 备份配置\n11. 恢复配置\n12. 更新程序\n13. 卸载程序\n14. 高级：复用现有 TUIC 导出配置\n15. 高级：手动添加本机中转\n16. 查看连接信息和账号密码\n17. 高级：粘贴整条信息添加本机中转\n18. 重新导出双模式客户端文件\n19. 给已有中转启用加密 TCP + TUIC\n20. 设置 VPS 公网 IP/域名\n21. 高级：添加原生 SOCKS5 中转\n0. 退出')
             option = ask('请输入选项')
             if option == '0':
                 return
@@ -687,13 +881,36 @@ def menu(manager):
                 uninstall(manager)
                 return
             with manager.lock():
-                if option in ('1', '4', '15'):
+                if option == '1':
+                    enable_dual(manager, pasted_row(manager))
+                elif option in ('4', '15', '21'):
                     previous = select_row(manager) if option == '4' else None
-                    row = new_row(manager, previous, local_tuic=option == '15')
+                    row = pasted_row(manager, previous) if previous else new_row(manager, local_tuic=option == '15')
                     manager.apply({row['port']: row})
-                    show_connection(row)
+                    if row.get('access'):
+                        export_dual(manager)
+                    show_connection(row, manager)
                 elif option == '14':
                     export_tuic(manager)
+                elif option == '16':
+                    show_connection(select_row(manager), manager)
+                elif option == '17':
+                    row = pasted_row(manager)
+                    manager.apply({row['port']: row})
+                    show_connection(row)
+                elif option == '18':
+                    export_dual(manager)
+                elif option == '19':
+                    enable_dual(manager, select_row(manager))
+                elif option == '20':
+                    address = host(ask('VPS 公网 IP/域名'))
+                    from access import configs, AccessError
+                    try:
+                        configs([r for r in manager.rows() if r.get('access')], address)
+                    except AccessError as exc:
+                        raise Error(str(exc)) from None
+                    write_json(manager.root / 'public-address.json', {'address': address})
+                    export_dual(manager)
                 elif option in ('2', '8'):
                     show_rows(manager)
                 elif option == '3':
@@ -715,13 +932,14 @@ def menu(manager):
                 elif option == '9':
                     from collections import deque
                     row = select_row(manager)
-                    for path in (manager.log / ('relay-' + str(row['port']) + '.log'), manager.log / ('service-' + str(row['port']) + '.log')):
+                    for path in (manager.log / (kind + '-' + str(row['port']) + '.log') for kind in ('relay', 'service', 'access')):
                         if path.exists():
                             with path.open(encoding='utf-8', errors='replace') as stream:
                                 lines = [line.rstrip('\n') for line in deque(stream, maxlen=50)]
                             for line in lines:
                                 # Defense in depth for older imported logs.
-                                for secret in (row['upstream_password'], row['client_password'], row['upstream_user']):
+                                for secret in (row['upstream_password'], row['client_password'], row['upstream_user'],
+                                               *([row['access']['tuic_password'], row['access']['ss_password']] if row.get('access') else [])):
                                     line = line.replace(secret, '********')
                                 print(line)
                 elif option == '10':
@@ -737,7 +955,7 @@ def menu(manager):
                         manager.restore(backups[index - 1])
                         print('恢复完成，启用端口的出口已验证。')
                 else:
-                    print('无效选项，请输入 0–15。')
+                    print('无效选项，请输入 0–21。')
         except Error as exc:
             print('错误：' + str(exc))
             if (manager.root / 'pending.json').exists():
@@ -754,13 +972,15 @@ def main():
     os.umask(0o077)
     args = sys.argv[1:]
     # systemd's read-only /etc sandbox must never be chmod'ed by the launcher.
-    manager = Manager(readonly=args[:1] == ['run'])
+    manager = Manager(readonly=args[:1] in (['run'], ['access-run']))
     if args == ['menu']:
         menu(manager)
     elif args == ['uninstall']:
         uninstall(manager)
     elif len(args) == 2 and args[0] == 'run' and args[1].isdecimal() and FIRST <= int(args[1]) <= LAST:
         manager.run(int(args[1]))
+    elif len(args) == 2 and args[0] == 'access-run' and args[1].isdecimal() and FIRST <= int(args[1]) <= LAST:
+        manager.run_access(int(args[1]))
     elif args == ['check']:
         with manager.lock():
             for row in manager.rows():

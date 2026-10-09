@@ -4,10 +4,11 @@ set -Eeuo pipefail
 trap 'echo "错误：安装步骤失败，请检查上方的软件源、网络或文件权限错误。" >&2' ERR
 umask 077
 REPO='youqishi1/socks5-relay-manager'
-REF="${SOCKS_REPO_REF:-v1.1.0}"
+REF="${SOCKS_REPO_REF:-v1.2.0}"
 CORE_COMMIT='da99424eac4092e3722f1a5b1844cfe80478f580'
 CORE_SHA256='9541e866d9ce04d051b07aa7b7c23bf717c5bc5ef7a9f07963e31a139038faeb'
 CORE_VERSION='0.9.9.0'
+ACCESS_VERSION='1.14.2'
 APP='/opt/socks5-relay-manager'
 STATE='/etc/socks5-relay-manager'
 LOG='/var/log/socks5-relay-manager'
@@ -42,7 +43,11 @@ if ! command -v systemctl >/dev/null || [[ ! -d /run/systemd/system ]]; then
 fi
 arch=$(uname -m)
 case "$arch" in
-    x86_64|aarch64|armv7l|i686|riscv64) ;;
+    x86_64) access_arch=amd64; access_sha=a684484d7477d1437282ee411f4d131d0340aaad60a7868841ebd5d87dd8a0c6 ;;
+    aarch64) access_arch=arm64; access_sha=b43a1fb1bda131c6653576741ce527eb2bdeab7c9308ca90ee8b972abb7e4a7f ;;
+    armv7l) access_arch=armv7; access_sha=1e2700de1cca1b58d410abc0ead40b595aa26ebe4812e0475311228d3e688db4 ;;
+    i686) access_arch=386; access_sha=041389d19756e40709516ee22fe6dcc2a9d7043439dd062ca486231bde8417cf ;;
+    riscv64) access_arch=riscv64; access_sha=7ee2d238081085a4047569b5a9f296763ede3f59742786a30a2ebc8a9f611e4f ;;
     *) echo "错误：尚未支持的 CPU 架构：$arch" >&2; exit 1 ;;
 esac
 if [[ ! $REF =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ || $REF == *..* ]]; then
@@ -56,7 +61,7 @@ case "$ID:${VERSION_ID:-}" in
 esac
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y --no-install-recommends ca-certificates curl python3 iproute2 logrotate util-linux tar gzip
+apt-get install -y --no-install-recommends ca-certificates curl python3 iproute2 logrotate util-linux tar gzip openssl
 install -d -m 700 "$APP" "$APP/releases" "$STATE" "$LOG"
 exec 9>"$STATE/manager.lock"
 chmod 600 "$STATE/manager.lock"
@@ -84,6 +89,16 @@ cleanup() {
                 install -m 755 "$stage/old-core" "$APP/3proxy"
             else
                 rm -f -- "$APP/3proxy"
+            fi
+            if [[ -f $stage/old-access-unit ]]; then
+                install -m 644 "$stage/old-access-unit" /etc/systemd/system/socks-access@.service
+            else
+                rm -f -- /etc/systemd/system/socks-access@.service
+            fi
+            if [[ -f $stage/old-access-core ]]; then
+                install -m 755 "$stage/old-access-core" "$APP/sing-box"
+            else
+                rm -f -- "$APP/sing-box"
             fi
             systemctl daemon-reload || true
             if [[ -n $old_release ]]; then
@@ -133,7 +148,7 @@ fi
 python3 - "$stage/source" <<'PY'
 import pathlib, py_compile, sys
 p = pathlib.Path(sys.argv[1])
-for name in ('install.sh', 'socks-menu.sh', 'uninstall.sh', 'VERSION', 'scripts/manager.py', 'scripts/client_config.py', 'systemd/socks-relay@.service'):
+for name in ('install.sh', 'socks-menu.sh', 'uninstall.sh', 'VERSION', 'scripts/manager.py', 'scripts/access.py', 'scripts/client_config.py', 'systemd/socks-relay@.service', 'systemd/socks-access@.service'):
     if not (p / name).is_file() or (p / name).is_symlink():
         sys.exit('错误：管理程序源码不完整或含有不安全链接。')
 for script in (p / 'scripts').glob('*.py'):
@@ -144,6 +159,8 @@ if [[ -L $APP/current ]]; then
     old_release=$(readlink "$APP/current")
     cp -- /etc/systemd/system/socks-relay@.service "$stage/old-unit"
     cp -- "$APP/3proxy" "$stage/old-core"
+    [[ ! -f /etc/systemd/system/socks-access@.service ]] || cp -- /etc/systemd/system/socks-access@.service "$stage/old-access-unit"
+    [[ ! -f $APP/sing-box ]] || cp -- "$APP/sing-box" "$stage/old-access-core"
     python3 - "$APP/current/scripts" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
@@ -156,13 +173,26 @@ elif [[ -e $APP/current ]]; then
     echo '错误：项目 current 路径不是预期的版本链接，请先检查。' >&2
     exit 1
 else
-    for target in /etc/systemd/system/socks-relay@.service /etc/logrotate.d/socks5-relay-manager /usr/local/bin/socks-menu /usr/local/bin/socks-relay-uninstall; do
+    for target in /etc/systemd/system/socks-relay@.service /etc/systemd/system/socks-access@.service /etc/logrotate.d/socks5-relay-manager /usr/local/bin/socks-menu /usr/local/bin/socks-relay-uninstall; do
         if [[ -e $target ]]; then
             echo "错误：路径已存在，拒绝覆盖其他程序：$target" >&2
             exit 1
         fi
     done
 fi
+echo '正在准备加密 TCP + TUIC 核心（固定官方版本及 SHA-256 校验）...'
+if [[ -x $APP/sing-box && -f $APP/access-version && $(cat "$APP/access-version") == "$ACCESS_VERSION" ]]; then
+    cp -- "$APP/sing-box" "$stage/sing-box"
+else
+    curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 10 --max-time 180 \
+        "https://github.com/SagerNet/sing-box/releases/download/v$ACCESS_VERSION/sing-box-$ACCESS_VERSION-linux-$access_arch.tar.gz" -o "$stage/access.tar.gz"
+    echo "$access_sha  $stage/access.tar.gz" | sha256sum -c -
+    mkdir "$stage/access"
+    tar -xzf "$stage/access.tar.gz" -C "$stage/access"
+    cp -- "$stage/access/sing-box-$ACCESS_VERSION-linux-$access_arch/sing-box" "$stage/sing-box"
+fi
+chmod 755 "$stage/sing-box"
+"$stage/sing-box" version
 echo '正在准备 3proxy 核心...'
 if [[ -x $APP/3proxy && -f $APP/core-version && $(cat "$APP/core-version") == "$CORE_VERSION" ]]; then
     cp -- "$APP/3proxy" "$stage/3proxy"
@@ -230,9 +260,12 @@ chmod -R go-rwx "$release"
 switched=1
 install -m 755 "$stage/3proxy" "$APP/3proxy.new"
 mv -f -- "$APP/3proxy.new" "$APP/3proxy"
+install -m 755 "$stage/sing-box" "$APP/sing-box.new"
+mv -f -- "$APP/sing-box.new" "$APP/sing-box"
 ln -s "$release" "$APP/current.new"
 mv -Tf "$APP/current.new" "$APP/current"
 install -m 644 "$release/systemd/socks-relay@.service" /etc/systemd/system/socks-relay@.service
+install -m 644 "$release/systemd/socks-access@.service" /etc/systemd/system/socks-access@.service
 # Explicitly recreate both standard error/access logs with private permissions.
 python3 - "$APP/current/scripts" <<'PY'
 import sys, os
@@ -240,7 +273,7 @@ sys.path.insert(0, sys.argv[1])
 from manager import Manager, check_config
 m = Manager()
 for row in m.rows():
-    for kind in ('service', 'relay'):
+    for kind in ('service', 'relay', 'access'):
         path = m.log / (kind + '-' + str(row['port']) + '.log')
         path.touch(mode=0o600, exist_ok=True)
         os.chmod(path, 0o600)
@@ -262,7 +295,9 @@ install -m 755 "$release/uninstall.sh" /usr/local/bin/socks-relay-uninstall
 install -m 644 "$release/systemd/logrotate" /etc/logrotate.d/socks5-relay-manager
 printf '%s\n' "$CORE_VERSION" >"$APP/core-version"
 chmod 600 "$APP/core-version"
+printf '%s\n' "$ACCESS_VERSION" >"$APP/access-version"
+chmod 600 "$APP/access-version"
 completed=1
-echo '安装成功！执行 socks-menu 打开中文菜单。首次安装暂无中转，选择 1 添加并生成安全账号密码。'
-echo '已有同台 VPS 的 TUIC：选择 15 添加本机中转，再选 14 导出客户端配置；无需开放 SOCKS5 公网端口。'
+echo '安装成功！执行 socks-menu，选 1 粘贴完整 SOCKS5 自动生成加密 TCP + TUIC；选 16 随时查看凭据。'
+echo '已有旧版中转：选 19 启用双模式；选 18 导出 Clash Verge/v2rayN 客户端文件。'
 echo '未修改 SSH、防火墙、云安全组或已有 TUIC 服务。'

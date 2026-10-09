@@ -395,7 +395,7 @@ class RelayTests(unittest.TestCase):
     def test_17_chinese_menu_add_view_test_exit(self):
         upstream = self.upstream()
         port = self.manager.allocate()
-        answers = iter(['1', '127.0.0.1', str(upstream.server_address[1]), upstream.user,
+        answers = iter(['21', '127.0.0.1', str(upstream.server_address[1]), upstream.user,
                         'n', '127.0.0.1', '0.0.0.0', '', 'vps.example.com',
                         '2', '6', str(port), '0'])
         output = io.StringIO()

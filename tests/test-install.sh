@@ -9,4 +9,4 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 bash install.sh --local
 python3 tests/test_systemd.py
 logrotate --debug /etc/logrotate.d/socks5-relay-manager
-systemd-analyze verify /etc/systemd/system/socks-relay@.service
+systemd-analyze verify /etc/systemd/system/socks-relay@.service /etc/systemd/system/socks-access@.service
