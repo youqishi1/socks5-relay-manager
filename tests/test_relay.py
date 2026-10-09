@@ -415,6 +415,12 @@ class RelayTests(unittest.TestCase):
             m.health('127.0.0.1', row['port'], 'wrong-client', row['client_password'], self.manager.ip_url)
         self.assertEqual(self.target.hits, [])
 
+    def test_19_service_launcher_does_not_write_protected_directories(self):
+        row = self.add()
+        with patch.object(m, 'private_dir', side_effect=AssertionError('readonly launcher attempted a write')):
+            reader = m.Manager(self.manager.root, self.manager.log, BINARY, readonly=True)
+            self.assertEqual(reader.row(row['port']), row)
+
 
 if __name__ == '__main__':
     if not BINARY.is_file():

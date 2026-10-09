@@ -30,3 +30,8 @@ jobs:
           SOCKS_REPO_REF: ${{ github.sha }}
         run: |
           sudo --preserve-env=GH_TOKEN,SOCKS_REPO_REF bash -c 'bash <(gh api -H "Accept: application/vnd.github.raw+json" "repos/youqishi1/socks5-relay-manager/contents/install.sh?ref=$SOCKS_REPO_REF")'
+      - name: Service diagnostics on failure
+        if: failure()
+        run: |
+          sudo journalctl -u 'socks-relay@*' --no-pager -n 80
+          sudo sh -c 'for file in /var/log/socks5-relay-manager/service-*.log; do [ ! -f "$file" ] || tail -n 30 "$file"; done'

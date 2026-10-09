@@ -323,12 +323,13 @@ def listening(port, bind='0.0.0.0'):
 
 
 class Manager:
-    def __init__(self, root=ROOT, log=LOG, binary=BINARY, backend=None, ip_url=IP_URL):
+    def __init__(self, root=ROOT, log=LOG, binary=BINARY, backend=None, ip_url=IP_URL, readonly=False):
         self.root, self.log, self.binary = Path(root), Path(log), Path(binary)
         self.backend = backend or Systemd()
         self.ip_url = ip_url
-        private_dir(self.root)
-        private_dir(self.log)
+        if not readonly:
+            private_dir(self.root)
+            private_dir(self.log)
 
     @contextlib.contextmanager
     def lock(self):
@@ -682,8 +683,9 @@ def main():
     if os.name != 'posix' or os.geteuid() != 0:
         raise Error('管理操作需要 root 权限，请使用 sudo socks-menu。')
     os.umask(0o077)
-    manager = Manager()
     args = sys.argv[1:]
+    # systemd's read-only /etc sandbox must never be chmod'ed by the launcher.
+    manager = Manager(readonly=args[:1] == ['run'])
     if args == ['menu']:
         menu(manager)
     elif args == ['uninstall']:
