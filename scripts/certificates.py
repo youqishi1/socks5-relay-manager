@@ -168,7 +168,10 @@ def obtain(app, settings, renew=False):
     command = acme_command(binary, app / 'acme', settings, renew=renew or (cert.exists() and key.exists()))
     try:
         result = subprocess.run(command, capture_output=True, timeout=240,
-            env={k: v for k, v in os.environ.items() if not k.startswith('LEGO_')})
+            env={k: v for k, v in os.environ.items() if not k.startswith('LEGO_')},
+            # Challenge files must be readable by the existing web-server user.
+            # Lego writes account/key files as 0600 within our private 0700 base.
+            umask=0o022 if settings['webroot'] else 0o077)
     except (OSError, subprocess.TimeoutExpired):
         raise AccessError('证书申请或续期超时，原节点保留。') from None
     if result.returncode:

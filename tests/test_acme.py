@@ -59,6 +59,15 @@ class DNSTCP(DNS):
 
 
 class QuietHTTP(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if os.name == 'posix' and '/.well-known/acme-challenge/' in self.path:
+            target = Path(self.translate_path(self.path))
+            if not (target.stat().st_mode & 0o004) or any(not (p.stat().st_mode & 0o001)
+                    for p in (target.parent, target.parent.parent)):
+                self.send_error(403, 'Challenge must be readable by an existing web-server account')
+                return
+        super().do_GET()
+
     def log_message(self, *_):
         pass
 
@@ -111,7 +120,8 @@ class ACME(unittest.TestCase):
                     env = {k: v for k, v in os.environ.items() if not k.startswith('LEGO_')}
                     env['LEGO_CA_CERTIFICATES'] = str(root / 'cert.pem')
                     def run(command):
-                        result = subprocess.run(command, env=env, capture_output=True, timeout=60)
+                        permissions = {'umask': 0o022 if '--http.webroot' in command else 0o077} if os.name == 'posix' else {}
+                        result = subprocess.run(command, env=env, capture_output=True, timeout=60, **permissions)
                         self.assertEqual(result.returncode, 0, result.stdout.decode(errors='replace') + result.stderr.decode(errors='replace') + '\n' + (root / 'pebble.log').read_text())
                     run(args)
                     cert, key = c.material_paths(root, settings['domain'])
