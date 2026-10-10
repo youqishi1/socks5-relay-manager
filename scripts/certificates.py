@@ -209,7 +209,7 @@ def install_timer():
         f'ExecStart={APP}/python3 {APP}/current/scripts/manager.py renew-cert\n')
     atomic(units / 'socks-relay-cert.timer', '[Unit]\nDescription=Daily relay domain certificate renewal\n\n'
         '[Timer]\nOnBootSec=10min\nOnCalendar=*-*-* 00:15:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n')
-    for args in (['daemon-reload'], ['enable', '--now', 'socks-relay-cert.timer']):
+    for args in (['daemon-reload'], ['enable', 'socks-relay-cert.timer'], ['start', 'socks-relay-cert.timer']):
         if subprocess.run(['systemctl', *args], capture_output=True).returncode:
             raise Error('证书已配置，但自动续期定时器未启动，请重新运行菜单 22。')
 

@@ -856,7 +856,8 @@ def uninstall(manager):
         manager.backup()
         for row in manager.rows():
             manager.backend.apply(row['port'], None)
-    subprocess.run(['systemctl', 'disable', '--now', 'socks-relay-cert.timer'], capture_output=True)
+    subprocess.run(['systemctl', 'stop', 'socks-relay-cert.timer'], capture_output=True)
+    subprocess.run(['systemctl', 'disable', 'socks-relay-cert.timer'], capture_output=True)
     subprocess.run(['systemctl', 'stop', 'socks-relay-cert.service'], capture_output=True)
     shortcut = Path('/usr/local/bin/sb1')
     if shortcut.is_symlink() and os.readlink(shortcut) == '/usr/local/bin/socks-menu':

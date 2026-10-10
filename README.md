@@ -49,7 +49,7 @@ socks5://账号:密码@IP:端口
 - **v2rayN TCP**：复制 `连接信息.txt` 的 `ss://` 链接导入并启用，本地端口沿用 v2rayN 设置。
 - **v2rayN TUIC**：支持 ConfigVersion 4 的版本可以复制 `v2rayN-一键导入.txt` 全部内容，从剪贴板一次导入 TCP/TUIC。TUIC 使用内嵌证书的 `v2rayn://` 官方内部分享格式。[官方解析源码](https://github.com/2dust/v2rayN/blob/master/v2rayN/ServiceLib/Handler/Fmt/InnerFmt.cs)。旧版不支持时添加自定义配置，选择 `v2rayn-tuic.json`，核心选 sing-box 1.14.2 或兼容更新版，Socks 端口留空，再启用。[官方说明](https://github.com/2dust/v2rayN/wiki/Description-of-some-ui)。
 
-**常见 TUIC 短链接**：`TUIC-普通链接.txt` 使用 `tuic://UUID:密码@地址:端口?...` 写法。导入短链接后，需要在 TUIC 节点证书/Cert 字段粘贴对应 `TUIC-20001-证书.pem` 的完整公开 PEM（包括首尾标记），保持证书验证开启。普通短链接无法携带 v2rayN 自动信任的 PEM 信息，单独复制并不能保证连接成功。没有该证书编辑功能的旧客户端，请用上述安全一键导入或自定义 JSON；Clash 使用完整 YAML。不要为了使用短链接关闭验证。公开证书可以交给自己的客户端，私钥始终留在 VPS。
+**常见 TUIC 短链接（默认自签模式）**：`TUIC-普通链接.txt` 使用 `tuic://UUID:密码@地址:端口?...` 写法。尚未配置菜单 22 的域名证书时，导入短链接后，需要在 TUIC 节点证书/Cert 字段粘贴对应 `TUIC-20001-证书.pem` 的完整公开 PEM（包括首尾标记），保持证书验证开启。普通短链接无法携带 v2rayN 自动信任的 PEM 信息，单独复制并不能保证连接成功。没有该证书编辑功能的旧客户端，请用上述安全一键导入或自定义 JSON；Clash 使用完整 YAML。不要为了使用短链接关闭验证。公开证书可以交给自己的客户端，私钥始终留在 VPS。
 
 **MiSub / 小火箭 / v2rayN 普通订阅分发**：每台 VPS 可独立运行 `sb1` → **22**，输入自己的 TUIC 子域名，自动申请公开 CA 证书并启用每日续期检查。先把域名 A 记录解析到该 VPS；Cloudflare 使用“仅 DNS”。HTTP-01 申请和续期需要放行 **80/TCP**。80 端口空闲时网站根目录留空；已有网站时填写该域名的网站根目录，程序使用 webroot 验证，不停止网站。邮箱可留空。
 

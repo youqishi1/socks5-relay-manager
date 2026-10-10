@@ -174,10 +174,24 @@ class CertificateTests(unittest.TestCase):
             subprocess.run(['systemd-analyze', 'verify', '/etc/systemd/system/socks-relay-cert.service',
                 '/etc/systemd/system/socks-relay-cert.timer'], check=True, capture_output=True)
         finally:
-            subprocess.run(['systemctl', 'disable', '--now', 'socks-relay-cert.timer'], capture_output=True)
+            subprocess.run(['systemctl', 'stop', 'socks-relay-cert.timer'], capture_output=True)
+            subprocess.run(['systemctl', 'disable', 'socks-relay-cert.timer'], capture_output=True)
             for name in ('socks-relay-cert.service', 'socks-relay-cert.timer'):
                 (Path('/etc/systemd/system') / name).unlink(missing_ok=True)
             subprocess.run(['systemctl', 'daemon-reload'], capture_output=True)
+
+    @unittest.skipUnless(os.environ.get('RELAY_DISPOSABLE_HOST') == 'YES', 'Real Linux certificate tool installation on disposable CI hosts')
+    def test_real_private_certificate_tool_install_and_verified_cache(self):
+        with tempfile.TemporaryDirectory(prefix='relay-lego-install-test-') as folder:
+            app = Path(folder)
+            binary = c.ensure_client(app)
+            result = subprocess.run([str(binary), '--version'], capture_output=True, check=True)
+            self.assertIn(b'5.5.2', result.stdout)
+            digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+            self.assertEqual((binary.parent / 'lego.sha256').read_text().strip(), digest)
+            self.assertEqual(binary.stat().st_mode & 0o777, 0o700)
+            with patch.object(c.subprocess, 'run', side_effect=AssertionError('Verified cache should not download again')):
+                self.assertEqual(c.ensure_client(app), binary)
 
 
 if __name__ == '__main__':
