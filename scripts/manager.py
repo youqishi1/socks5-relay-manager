@@ -706,7 +706,7 @@ def export_dual(manager):
         'TUIC-普通链接.txt 是常见 tuic:// 格式。使用本项目自签证书时，导入短链接还需在节点证书/Cert 字段粘贴对应 TUIC-端口-证书.pem 全文；不要关闭证书验证。',
         'v2rayN 自定义配置的本地 SOCKS5 端口及账号密码见连接信息.txt。只有导入 ss:// 单节点时，本地端口沿用 v2rayN 设置。',
         '同一套多端口配置只运行一个客户端，避免本机端口冲突。新增、删除或改密码后，菜单 18 重新导出并导入。',
-        'TUIC 证书在文件内验证，不需要购买域名，不关闭证书验证；私钥保留在 VPS，未包含在客户端文件中。',
+        '自签模式通过配置内证书验证；MiSub/小火箭分发请先用菜单 22 配置域名证书，再使用普通 tuic:// 链接。私钥保留在 VPS，不包含在客户端文件中。',
         '公网入口同时需要允许对应 TCP 和 UDP 端口。云安全组由服务商控制；本程序不关闭防火墙或更改现有服务。',
         '电脑 → 加密 TCP 或 TUIC → VPS 本机 3proxy → 固定上游 SOCKS5 → 网站；没有直连回退。',
         '应用 UDP 转发不启用。TUIC 使用 UDP 传输 TCP 请求。真实速度需要在青岛客户端用同一下载目标对比。',
@@ -726,6 +726,8 @@ def enable_dual(manager, row):
     if not row.get('access'):
         try:
             row['access'] = generate(manager.rows(), row['port'])
+            from certificates import for_new
+            row['access'] = for_new(manager, row['access'])
         except AccessError as exc:
             raise Error(str(exc)) from None
     manager.apply({row['port']: row})
@@ -828,6 +830,7 @@ def show_rows(manager):
             active = manager.backend.call('is-active', '--quiet', 'socks-access@' + str(row['port']) + '.service', required=False)
             owns = manager.backend.owns_listener(front, unit='socks-access@' + str(row['port']) + '.service', both=True)
             print('   加密 TCP + TUIC 公网端口 ' + str(front) + ' | 双模式服务 ' + ('运行中' if active else '未运行') + ' | TCP/UDP 监听 ' + ('是' if owns else '否'))
+            print('   TUIC 证书：' + ('公共 CA | 域名 ' + row['access']['server_name'] if row['access'].get('certificate_trust') == 'system' else '自签 | MiSub 分发请配置菜单 22'))
         else:
             print('   允许来源：' + ','.join(row['sources']) + ' | 绑定地址：' + row['bind'])
             if row['bind'] == '127.0.0.1' or row['sources'] == ['127.0.0.1']:
@@ -853,10 +856,13 @@ def uninstall(manager):
         manager.backup()
         for row in manager.rows():
             manager.backend.apply(row['port'], None)
+    subprocess.run(['systemctl', 'disable', '--now', 'socks-relay-cert.timer'], capture_output=True)
+    subprocess.run(['systemctl', 'stop', 'socks-relay-cert.service'], capture_output=True)
     shortcut = Path('/usr/local/bin/sb1')
     if shortcut.is_symlink() and os.readlink(shortcut) == '/usr/local/bin/socks-menu':
         shortcut.unlink()
-    for path in (Path('/etc/systemd/system/socks-relay@.service'), Path('/etc/systemd/system/socks-access@.service'), Path('/etc/logrotate.d/socks5-relay-manager'),
+    for path in (Path('/etc/systemd/system/socks-relay@.service'), Path('/etc/systemd/system/socks-access@.service'),
+                 Path('/etc/systemd/system/socks-relay-cert.service'), Path('/etc/systemd/system/socks-relay-cert.timer'), Path('/etc/logrotate.d/socks5-relay-manager'),
                  Path('/usr/local/bin/socks-menu'), Path('/usr/local/bin/socks-relay-uninstall')):
         path.unlink(missing_ok=True)
     subprocess.run(['systemctl', 'daemon-reload'], check=True)
@@ -877,7 +883,7 @@ def menu(manager):
             state = '运行中' if enabled and running == len(enabled) else ('部分运行/异常' if running else '未运行/暂无启用代理')
             print('\n========================================\n        SOCKS5 中转管理系统\n========================================')
             print('系统状态：' + state + '\n代理数量：' + str(len(rows)) + '\n端口范围：20001-29999')
-            print('1. 一键添加加密 TCP + TUIC（粘贴整条 SOCKS5）\n2. 查看全部中转\n3. 删除 SOCKS5 中转\n4. 修改 SOCKS5 中转\n5. 检测所有代理出口 IP\n6. 检测指定代理\n7. 重启代理服务\n8. 查看运行状态\n9. 查看日志\n10. 备份配置\n11. 恢复配置\n12. 更新程序\n13. 卸载程序\n14. 高级：复用现有 TUIC 导出配置\n15. 高级：手动添加本机中转\n16. 查看全部连接信息和账密\n17. 高级：粘贴整条信息添加本机中转\n18. 重新导出双模式客户端文件\n19. 给已有中转启用加密 TCP + TUIC\n20. 设置 VPS 公网 IP/域名\n21. 高级：添加原生 SOCKS5 中转\n0. 退出')
+            print('1. 一键添加加密 TCP + TUIC（粘贴整条 SOCKS5）\n2. 查看全部中转\n3. 删除 SOCKS5 中转\n4. 修改 SOCKS5 中转\n5. 检测所有代理出口 IP\n6. 检测指定代理\n7. 重启代理服务\n8. 查看运行状态\n9. 查看日志\n10. 备份配置\n11. 恢复配置\n12. 更新程序\n13. 卸载程序\n14. 高级：复用现有 TUIC 导出配置\n15. 高级：手动添加本机中转\n16. 查看全部连接信息和账密\n17. 高级：粘贴整条信息添加本机中转\n18. 重新导出双模式客户端文件\n19. 给已有中转启用加密 TCP + TUIC\n20. 设置 VPS 公网 IP/域名\n21. 高级：添加原生 SOCKS5 中转\n22. 配置域名证书（MiSub / 小火箭 / v2rayN 分发）\n0. 退出')
             option = ask('请输入选项')
             if option == '0':
                 return
@@ -929,6 +935,9 @@ def menu(manager):
                         raise Error(str(exc)) from None
                     write_json(manager.root / 'public-address.json', {'address': address})
                     export_dual(manager)
+                elif option == '22':
+                    from certificates import configure
+                    configure(manager)
                 elif option in ('2', '8'):
                     show_rows(manager)
                 elif option == '3':
@@ -973,7 +982,7 @@ def menu(manager):
                         manager.restore(backups[index - 1])
                         print('恢复完成，启用端口的出口已验证。')
                 else:
-                    print('无效选项，请输入 0–21。')
+                    print('无效选项，请输入 0–22。')
         except Error as exc:
             print('错误：' + str(exc))
             if (manager.root / 'pending.json').exists():
@@ -1017,6 +1026,10 @@ def main():
     elif args == ['status']:
         with manager.lock():
             show_rows(manager)
+    elif args == ['renew-cert']:
+        from certificates import renew
+        with manager.lock():
+            renew(manager)
     else:
         raise Error('用法：sb1（兼容 socks-menu），或 manager.py status/check。')
 

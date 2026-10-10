@@ -4,6 +4,7 @@ import hashlib
 import ipaddress
 import json
 from pathlib import Path
+import re
 import secrets
 import socket
 import ssl
@@ -19,10 +20,43 @@ class AccessError(Exception):
     pass
 
 
+def domain_name(value):
+    if not isinstance(value, str) or len(value) > 253 or value != value.lower() or '.' not in value:
+        raise AccessError('请输入小写的完整域名，例如 tuic.example.com。')
+    if any(not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', part) for part in value.split('.')):
+        raise AccessError('域名格式无效。')
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        return value
+    raise AccessError('此功能需要域名，不能填写 IP。')
+
+
+def leaf_der(certificate):
+    if not isinstance(certificate, str) or len(certificate) > 65536:
+        raise ValueError('Invalid certificate chain')
+    blocks = re.findall(r'-----BEGIN CERTIFICATE-----[A-Za-z0-9+/=\s]+-----END CERTIFICATE-----', certificate)
+    if not 1 <= len(blocks) <= 8 or re.sub(r'\s', '', certificate) != re.sub(r'\s', '', ''.join(blocks)):
+        raise ValueError('Invalid certificate chain')
+    return ssl.PEM_cert_to_DER_cert(blocks[0])
+
+
+def server_name(front):
+    return front.get('server_name', SNI)
+
+
+def system_trust(front):
+    return front.get('certificate_trust') == 'system'
+
+
 def validate(front):
     fields = {'port', 'ss_password', 'uuid', 'tuic_password', 'certificate', 'private_key', 'fingerprint'}
-    if not isinstance(front, dict) or set(front) != fields:
+    if not isinstance(front, dict) or set(front) not in (fields, fields | {'server_name', 'certificate_trust'}):
         raise AccessError('双模式入口配置字段无效。')
+    if 'server_name' in front:
+        domain_name(front['server_name'])
+        if front['certificate_trust'] != 'system':
+            raise AccessError('域名证书信任模式无效。')
     if type(front['port']) is not int or not 30001 <= front['port'] <= 39999:
         raise AccessError('双模式入口端口必须为 30001–39999。')
     try:
@@ -31,9 +65,9 @@ def validate(front):
         uuid.UUID(front['uuid'])
         if not isinstance(front['tuic_password'], str) or not 16 <= len(front['tuic_password']) <= 128 or not all(32 <= ord(char) < 127 for char in front['tuic_password']):
             raise ValueError()
-        if not front['private_key'].startswith('-----BEGIN PRIVATE KEY-----') or len(front['private_key']) >= 12000:
+        if not front['private_key'].startswith(('-----BEGIN PRIVATE KEY-----', '-----BEGIN RSA PRIVATE KEY-----', '-----BEGIN EC PRIVATE KEY-----')) or len(front['private_key']) >= 12000:
             raise ValueError()
-        cert = ssl.PEM_cert_to_DER_cert(front['certificate'])
+        cert = leaf_der(front['certificate'])
         if hashlib.sha256(cert).hexdigest() != front['fingerprint']:
             raise ValueError()
     except (ValueError, TypeError, KeyError, AttributeError):
@@ -108,7 +142,8 @@ def v2rayn_link(front, address, label):
     profile = {'ConfigVersion': 4, 'ConfigType': 8, 'CoreType': 24, 'Remarks': label,
                'Address': address, 'Port': front['port'], 'Username': front['uuid'],
                'Password': front['tuic_password'], 'StreamSecurity': 'tls',
-               'AllowInsecure': 'false', 'Sni': SNI, 'Alpn': 'h3', 'Cert': front['certificate'],
+               'AllowInsecure': 'false', 'Sni': server_name(front), 'Alpn': 'h3',
+               'Cert': '' if system_trust(front) else front['certificate'],
                'ProtoExtraObj': {'CongestionControl': 'bbr'}}
     data = base64.urlsafe_b64encode(json.dumps(profile, ensure_ascii=False, separators=(',', ':')).encode()).decode().rstrip('=')
     return 'v2rayn://tuic/' + data
@@ -118,7 +153,7 @@ def tuic_link(front, address, label):
     """Common TUIC URI. Certificate trust is supplied separately, never disabled."""
     from urllib.parse import quote, urlencode
     server = '[' + address + ']' if ':' in address else address
-    query = urlencode({'sni': SNI, 'alpn': 'h3', 'congestion_control': 'bbr', 'allow_insecure': '0'})
+    query = urlencode({'sni': server_name(front), 'alpn': 'h3', 'congestion_control': 'bbr', 'allow_insecure': '0'})
     return ('tuic://' + front['uuid'] + ':' + quote(front['tuic_password'], safe='') + '@' + server
             + ':' + str(front['port']) + '?' + query + '#' + quote(label, safe=''))
 
@@ -153,10 +188,12 @@ def configs(rows, address):
             {'name': tcp_tag, 'type': 'ss', 'server': address, 'port': public, 'cipher': METHOD,
              'password': front['ss_password'], 'udp': False},
             {'name': tuic_tag, 'type': 'tuic', 'server': address, 'port': public, 'uuid': front['uuid'],
-             'password': front['tuic_password'], 'sni': SNI, 'alpn': ['h3'],
+             'password': front['tuic_password'], 'sni': server_name(front), 'alpn': ['h3'],
              'fingerprint': front['fingerprint'], 'skip-cert-verify': False,
              'congestion-controller': 'bbr', 'reduce-rtt': False}]
         clash['proxy-groups'].append({'name': selector, 'type': 'select', 'proxies': [tuic_tag, tcp_tag]})
+        if system_trust(front):
+            del clash['proxies'][-1]['fingerprint']
         clash['listeners'].append({'name': '本机-' + str(port), 'type': 'socks', 'listen': '127.0.0.1',
                                    'port': port, 'udp': False, 'proxy': selector,
                                    'users': [{'username': row['client_user'], 'password': row['client_password']}]})
@@ -167,8 +204,10 @@ def configs(rows, address):
             else:
                 outbound = {'type': 'tuic', 'tag': tag, 'server': address, 'server_port': public,
                             'uuid': front['uuid'], 'password': front['tuic_password'], 'congestion_control': 'bbr',
-                            'zero_rtt_handshake': False, 'tls': {'enabled': True, 'server_name': SNI,
+                            'zero_rtt_handshake': False, 'tls': {'enabled': True, 'server_name': server_name(front),
                             'alpn': ['h3'], 'insecure': False, 'certificate': front['certificate'].splitlines()}}
+                if system_trust(front):
+                    del outbound['tls']['certificate']
             clients[mode]['outbounds'].append(outbound)
             clients[mode]['inbounds'].append({'type': 'socks', 'tag': 'local-' + str(port), 'listen': '127.0.0.1',
                                             'listen_port': port, 'users': [{'username': row['client_user'], 'password': row['client_password']}]})
@@ -181,10 +220,14 @@ def configs(rows, address):
         certificates[cert_name] = front['certificate']
         standard.append(ordinary)
         quick += [link, internal]
+        trust_note = ('TUIC 普通链接（公开 CA 证书，可用于 MiSub、小火箭、v2rayN，保持证书验证开启）：'
+                      if system_trust(front) else 'TUIC 常见分享格式（自签证书，需同时信任配套证书，不能仅导入此链接就保证可用）：')
+        cert_note = ('域名/SNI：' + server_name(front) + '；客户端使用系统 CA 信任，无需手动安装配套证书。'
+                     if system_trust(front) else 'v2rayN 导入上面短链接后，在 TUIC 节点编辑页的证书/Cert 字段粘贴配套 PEM 全文；保持证书验证开启。')
         links += ['端口 ' + str(port) + ' 的加密 TCP 分享链接（v2rayN 可直接导入）：', link,
-                  'TUIC 常见分享格式（需同时信任配套证书，不能仅导入此链接就保证可用）：', ordinary,
+                  trust_note, ordinary,
                   '配套公开证书：' + cert_name + '；证书 SHA-256：' + front['fingerprint'],
-                  'v2rayN 导入上面短链接后，在 TUIC 节点编辑页的证书/Cert 字段粘贴配套 PEM 全文；保持证书验证开启。',
+                  cert_note,
                   '更方便的安全导入：复制 v2rayN-一键导入.txt 全部内容，或 Clash 导入 clash-dual.yaml。',
                   'TUIC：v2rayN 内部分享链接（支持 ConfigVersion 4 的版本，保留证书验证）：', internal,
                   '若旧版 v2rayN 不支持内部分享链接，使用自定义 v2rayn-tuic.json；Clash 使用 clash-dual.yaml。',

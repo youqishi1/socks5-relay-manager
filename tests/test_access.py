@@ -273,6 +273,56 @@ class DualChains(unittest.TestCase):
                 m.health('127.0.0.1', ports[0], self.rows[0]['client_user'], self.rows[0]['client_password'], self.manager.ip_url)
             self.assertEqual(len(self.fixture.target.hits), before)
 
+    @unittest.skipIf(os.name != 'posix', 'Go system-CA fixture uses process-local SSL_CERT_FILE on Linux')
+    def test_domain_tuic_through_actual_misub_with_system_ca_and_wrong_sni_rejection(self):
+        import hashlib
+        import shutil
+        import certificates as c
+        from misub_fixture import roundtrip
+        if not shutil.which('node'):
+            self.skipTest('Actual MiSub requires Node.js; certificate transport also tested separately')
+        domain = 'tuic.example.test'
+        cnf, cert, key = self.root / 'domain.cnf', self.root / 'domain.crt', self.root / 'domain.key'
+        cnf.write_text('[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ext\n[dn]\nCN=' + domain +
+            '\n[ext]\nsubjectAltName=DNS:' + domain + '\nbasicConstraints=critical,CA:TRUE\n')
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2',
+            '-config', str(cnf), '-keyout', str(key), '-out', str(cert)], check=True, capture_output=True)
+        pem = cert.read_text()
+        row = copy.deepcopy(self.rows[0])
+        row['access'] = c.public_front(row['access'], pem, key.read_text(), domain, hashlib.sha256(a.leaf_der(pem)).hexdigest())
+        self.manager.apply({row['port']: row})
+        node = roundtrip(a.tuic_link(row['access'], '203.0.113.1', '测试 TUIC'))['reparsed']
+        self.assertFalse(node.get('skip-cert-verify', False))
+        for kind in ('sing', 'mihomo'):
+            for valid in (True, False):
+                config = json.loads(a.configs([row], '203.0.113.1')['v2rayn-tuic.json' if kind == 'sing' else 'clash-dual.yaml'])
+                if kind == 'sing':
+                    port = m.free_port()
+                    config['inbounds'][0]['listen_port'] = port
+                    outbound = config['outbounds'][0]
+                    outbound.update(server='127.0.0.1', server_port=node['port'], uuid=node['uuid'], password=node['password'])
+                    outbound['tls'] = dict(enabled=True, server_name=node['sni'] if valid else 'wrong.example.test', alpn=node['alpn'], insecure=False)
+                else:
+                    port = m.free_port()
+                    config['listeners'][0]['port'] = port
+                    proxy = dict(node, server='127.0.0.1', sni=node['sni'] if valid else 'wrong.example.test',
+                                 servername=node['sni'] if valid else 'wrong.example.test', **{'skip-cert-verify': False})
+                    config['proxies'] = [proxy]
+                    config['proxy-groups'][0]['proxies'] = [proxy['name']]
+                with patch.dict(os.environ, {'SSL_CERT_FILE': str(cert)}):
+                    process = self.launch(kind, config, 'public-ca-' + kind + '-' + str(valid))
+                deadline = time.monotonic() + 6
+                while time.monotonic() < deadline and not m.listening(port, '127.0.0.1'):
+                    self.assertIsNone(process.poll())
+                    time.sleep(.05)
+                before = len(self.fixture.target.hits)
+                if valid:
+                    self.assertEqual(m.health('127.0.0.1', port, row['client_user'], row['client_password'], self.manager.ip_url)[0], '127.0.0.2')
+                else:
+                    with self.assertRaises(m.Error):
+                        m.health('127.0.0.1', port, row['client_user'], row['client_password'], self.manager.ip_url)
+                    self.assertEqual(len(self.fixture.target.hits), before)
+
     def test_upstream_failure_rolls_back_dual_services(self):
         old = self.manager.pointers()
         bad = copy.deepcopy(self.rows[0])

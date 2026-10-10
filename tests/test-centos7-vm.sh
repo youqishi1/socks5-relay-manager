@@ -95,6 +95,8 @@ echo '306f81e723e60ce6b828899a6fe83e1d00e9ecefb2dc8d4d849312a5bc00efdc  /root/mi
 gzip -d /root/mihomo.gz
 chmod 700 /root/mihomo
 export MIHOMO_BINARY=/root/mihomo
+export PYTHON_BINARY=/opt/socks5-relay-manager/python3
+bash tests/test-acme.sh
 /opt/socks5-relay-manager/python3 tests/test_clients.py
 /opt/socks5-relay-manager/python3 tests/test_access.py
 sha256sum -c /root/original-system-binaries.sha256
