@@ -160,6 +160,7 @@ def obtain(app, settings, renew=False):
     else:
         try:
             with socket.socket() as check:
+                check.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 check.bind(('0.0.0.0', 80))
         except OSError:
             raise AccessError('80 端口已有服务；请填写该域名网站根目录后使用 webroot 验证，不会停止网站。') from None
