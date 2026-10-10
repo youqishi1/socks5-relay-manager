@@ -4,6 +4,7 @@ Configuration parsing supplies candidates only: the web server, not this parser,
 decides which root serves the domain. Never reload or edit a web server.
 """
 from contextlib import ExitStack, contextmanager
+from collections import deque
 import glob
 import os
 from pathlib import Path
@@ -53,25 +54,27 @@ def directives(text):
 
 def candidates(domain, patterns=CONFIGS):
     domain_name(domain)
-    queue = [(Path(name), None) for pattern in patterns for name in sorted(glob.glob(pattern))]
+    queue = deque((Path(name), None) for pattern in patterns for name in sorted(glob.glob(pattern)))
     seen, roots, total = set(), [], 0
     # Bound file reads and include expansion; never walk website contents.
-    for path, base in queue:
+    while queue:
         if len(seen) >= 512 or total >= 8 * 1024 * 1024:
             break
+        path, base = queue.popleft()
         try:
+            base = base or path.parent
             path = path.resolve(strict=True)
             if path in seen or not path.is_file() or path.stat().st_size > 1024 * 1024:
                 continue
             seen.add(path)
             text = path.read_text(encoding='utf-8', errors='replace')
             total += len(text)
-            base = base or path.parent
             entries = list(directives(text))
         except (OSError, ValueError):
             continue
         # Apache's ServerRoot resolves relative includes; nginx uses its main
         # config directory. Files included from a main config keep that base.
+        includes = []
         for item in entries:
             if len(item) == 2 and item[0].lower() == 'serverroot' and Path(item[1]).is_absolute():
                 base = Path(item[1])
@@ -84,7 +87,10 @@ def candidates(domain, patterns=CONFIGS):
                 roots.append((priority, value))
             elif name in ('include', 'includeoptional'):
                 pattern = value if Path(value).is_absolute() else str(base / value)
-                queue.extend((Path(found), base) for found in sorted(glob.glob(pattern))[:512])
+                includes.extend((Path(found), base) for found in sorted(glob.glob(pattern))[:512])
+        # Traverse includes before independently seeded vhost files, preserving
+        # the main configuration's prefix for relative include paths.
+        queue.extendleft(reversed(includes))
     roots.extend((2, path) for path in ('/www/wwwroot/' + domain, '/var/www/' + domain,
                                        '/var/www/html', '/usr/share/nginx/html'))
     result = []

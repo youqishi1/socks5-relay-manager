@@ -161,6 +161,15 @@ class Webroot(unittest.TestCase):
                 w.detect(self.domain, roots=[str(self.root / 'missing')])
             fetch.assert_not_called()
 
+    def test_relative_include_keeps_main_prefix_when_vhost_is_also_seeded(self):
+        vhosts = self.root / 'vhosts'
+        vhosts.mkdir()
+        main, vhost, validation = self.root / 'nginx.conf', vhosts / 'site.conf', self.root / 'validation.conf'
+        main.write_text('http { include vhosts/*.conf; }')
+        vhost.write_text(f'server {{ server_name {self.domain}; include validation.conf; }}')
+        validation.write_text(f'location /.well-known/acme-challenge/ {{ root "{self.site.as_posix()}"; }}')
+        self.assertIn(str(self.site.resolve()), w.candidates(self.domain, patterns=[str(main), str(vhosts / '*.conf')]))
+
     def test_configure_only_asks_domain_email_when_auto_succeeds(self):
         manager = Mock(root=self.root)
         manager.rows.return_value = []
