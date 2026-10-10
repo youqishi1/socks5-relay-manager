@@ -18,6 +18,7 @@ echo "4f2fcb5bca8c85c9cf73ad140fccfc0d2be40bd81ab99879c79b7b8a0b4f70ed  $work/pe
 tar -xzf "$work/pebble.tar.gz" -C "$work"
 export LEGO_BINARY="$work/lego/lego"
 export PEBBLE_BINARY="$work/pebble-linux-amd64/linux/amd64/pebble"
+chmod 700 "$LEGO_BINARY" "$PEBBLE_BINARY"
 "$LEGO_BINARY" --version
 "$PEBBLE_BINARY" -version
 "${PYTHON_BINARY:-python3}" tests/test_certificates.py

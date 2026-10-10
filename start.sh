@@ -50,7 +50,7 @@ echo '正在下载固定版本 v1.3.1 安装包...'
 curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 10 --max-time 180 \
     https://github.com/youqishi1/socks5-relay-manager/releases/download/v1.3.1/socks5-relay-manager-v1.3.1-install.tar.gz \
     -o "$work/install.tar.gz"
-echo "4c5d9b6a91d413202b7a8b6e06002ac4f23de67b7bebce01af46a61826ca0524  $work/install.tar.gz" | sha256sum -c -
+echo "fe1775ab56af03c49189284aaa41fa9050c330cd044f18836f5eb90a833f44af  $work/install.tar.gz" | sha256sum -c -
 mkdir "$work/source"
 tar -xzf "$work/install.tar.gz" -C "$work/source"
 bash "$work/source/install.sh" --local
