@@ -92,6 +92,14 @@ SINGBOX_BINARY=/path/to/sing-box MIHOMO_BINARY=/path/to/mihomo \
 THREEPROXY_BINARY=/path/to/3proxy python3 tests/test_access.py
 ```
 
+## 域名证书与自动网站目录
+
+`tests/test_certificates.py` 检查完整证书链、私钥匹配、域名、有效期、系统 CA 验证、MiSub 普通 TUIC 解析/转换、凭据保留及申请失败隔离。Linux 可丢弃 CI 主机还验证真实 lego 安装、私有文件权限和 systemd 219 兼容续期定时器。
+
+`tests/test_acme.py` 使用固定校验的官方 lego 5.5.2 / Pebble 2.10.1，在本机高端口执行真实 HTTP-01 文件验证，测试空邮箱、签发、无需续期时不变、强制续期和自动识别现有目录后签发。使用测试专用 DNS 和 CA，不关闭验证，也不添加系统根证书。
+
+v1.3.2 的 `tests/test_webroot.py` 使用真实 curl/HTTP 请求验证选中域名的 Host、实际目录、多站点、include、引号/注释路径、错误响应和重定向拒绝、已有文件和权限保留、取消不修改配置。Linux 同时验证私有 umask 下新验证文件可读以及目录符号链接拒绝。Ubuntu CI 的 `tests/test_webroot_nginx.py` 运行独立高端口 Nginx，验证多虚拟主机、include 内 location 覆盖 root 和 HTTP 403 时安全失败；不使用其结果冒充所有面板/容器配置均可识别。
+
 ## 尚需真实部署验证
 
 v1.2.1 增加常见 TUIC URI 配套证书的真实连接测试，含特殊字符密码、证书验证开启、公开证书无私钥。菜单测试验证一次显示多条中转的全部客户端账密及 SS/TUIC 凭据，不要求选择端口；原有安全内部链接及客户端文件继续保留。

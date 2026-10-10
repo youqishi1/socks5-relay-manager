@@ -112,7 +112,8 @@ class CertificateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             manager = Mock(root=Path(folder))
             manager.rows.return_value = [self.row()]
-            with patch.object(m, 'ask', side_effect=[self.domain, '', '']), \
+            with patch.object(m, 'ask', side_effect=[self.domain, '']), \
+                 patch('webroot.detect', return_value=''), \
                  patch.object(c, 'obtain', side_effect=a.AccessError('fixture issuance failure')), \
                  patch.object(c, 'install_timer') as timer:
                 with self.assertRaises(m.Error):

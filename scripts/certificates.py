@@ -220,13 +220,24 @@ def install_timer():
 
 def configure(manager):
     from manager import ask, APP, read_json, write_json, export_dual, Error
-    print('域名 A 记录需指向此 VPS；Cloudflare 使用仅 DNS。申请/续期需要 TCP 80，可复用网站根目录。')
+    from webroot import detect
+    print('域名 A 记录需指向此 VPS；Cloudflare 使用仅 DNS。申请/续期需要 TCP 80，自动识别网站根目录。')
     previous = read_json(manager.root / SETTING) if (manager.root / SETTING).exists() else {}
     try:
         domain = domain_name(ask('TUIC 域名', previous.get('domain')).strip().lower())
         email = ask('证书联系邮箱（可留空）', previous.get('email', ''))
-        webroot = ask('该域名网站根目录（80 端口空闲时可留空）', previous.get('webroot', ''))
-        settings = validate_settings(dict(domain=domain, email=email, webroot=webroot))
+        settings = validate_settings(dict(domain=domain, email=email, webroot=''))
+        preferred = previous.get('webroot', '') if previous.get('domain') == domain else ''
+        try:
+            settings['webroot'] = detect(domain, preferred)
+        except AccessError as exc:
+            print('自动识别未通过：' + str(exc))
+            manual = ask('可选：手动网站根目录（不知道请回车取消，原节点保留）', '').strip()
+            if not manual:
+                raise exc
+            validate_settings(dict(settings, webroot=manual))
+            # A manual path receives the same HTTP proof; never blindly accept it.
+            settings['webroot'] = detect(domain, roots=[manual])
         material = obtain(APP, settings)
         changed = apply_material(manager, settings, material)
         write_json(manager.root / SETTING, settings)

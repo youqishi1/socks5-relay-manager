@@ -16,9 +16,11 @@ import threading
 import time
 import unittest
 import urllib.request
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import certificates as c
+import webroot as w
 
 
 def free_port():
@@ -142,7 +144,20 @@ class ACME(unittest.TestCase):
                     server = http.server.ThreadingHTTPServer(('127.0.0.1', challenge), handler)
                     threading.Thread(target=server.serve_forever, daemon=True).start()
                     try:
-                        webargs = c.acme_command(Path(lego), root / 'web-acme', dict(settings, webroot=str(site)))
+                        # Discover and prove the existing root before real ACME
+                        # issuance; DNS routing alone is local test infrastructure.
+                        config = root / 'nginx.conf'
+                        config.write_text(f'server {{ server_name {settings["domain"]}; root "{site.as_posix()}"; }}')
+                        original_run = subprocess.run
+                        def routed(command, **kwargs):
+                            command = list(command)
+                            command[1:1] = ['--resolve', f'{settings["domain"]}:{challenge}:127.0.0.1']
+                            return original_run(command, **kwargs)
+                        with patch.object(w.subprocess, 'run', side_effect=routed):
+                            detected = w.detect(settings['domain'], port=challenge,
+                                roots=w.candidates(settings['domain'], patterns=[str(config)]))
+                        self.assertEqual(Path(detected), site.resolve())
+                        webargs = c.acme_command(Path(lego), root / 'web-acme', dict(settings, webroot=detected))
                         webargs[webargs.index('--server') + 1] = directory
                         run(webargs)
                         self.assertEqual((site / 'index.html').read_text(), 'existing website')

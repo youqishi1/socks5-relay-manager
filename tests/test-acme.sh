@@ -22,4 +22,5 @@ chmod 700 "$LEGO_BINARY" "$PEBBLE_BINARY"
 "$LEGO_BINARY" --version
 "$PEBBLE_BINARY" -version
 "${PYTHON_BINARY:-python3}" tests/test_certificates.py
+"${PYTHON_BINARY:-python3}" tests/test_webroot.py
 "${PYTHON_BINARY:-python3}" tests/test_acme.py

@@ -14,7 +14,7 @@ TCP 使用 Shadowsocks 2022，TUIC 使用 QUIC/TLS。两种入口共用公网端
 以 root 登录，普通用户先 `sudo -i`，再复制一整行：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.3.1/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.3.2/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
 ```
 
 固定版本安装包先校验 SHA-256，再执行安装。交互终端安装后自动打开菜单，以后 root 输入 `sb1`，普通用户输入 `sudo sb1`。原命令 `socks-menu` 继续可用。若 `/usr/local/bin/sb1` 已被其他程序占用，安装器拒绝覆盖。没有 curl 时先安装 `curl ca-certificates`。下载源码后在源码目录执行 `bash install.sh --local`。
@@ -51,7 +51,11 @@ socks5://账号:密码@IP:端口
 
 **常见 TUIC 短链接（默认自签模式）**：`TUIC-普通链接.txt` 使用 `tuic://UUID:密码@地址:端口?...` 写法。尚未配置菜单 22 的域名证书时，导入短链接后，需要在 TUIC 节点证书/Cert 字段粘贴对应 `TUIC-20001-证书.pem` 的完整公开 PEM（包括首尾标记），保持证书验证开启。普通短链接无法携带 v2rayN 自动信任的 PEM 信息，单独复制并不能保证连接成功。没有该证书编辑功能的旧客户端，请用上述安全一键导入或自定义 JSON；Clash 使用完整 YAML。不要为了使用短链接关闭验证。公开证书可以交给自己的客户端，私钥始终留在 VPS。
 
-**MiSub / 小火箭 / v2rayN 普通订阅分发**：每台 VPS 可独立运行 `sb1` → **22**，输入自己的 TUIC 子域名，自动申请公开 CA 证书并启用每日续期检查。先把域名 A 记录解析到该 VPS；Cloudflare 使用“仅 DNS”。HTTP-01 申请和续期需要放行 **80/TCP**。80 端口空闲时网站根目录留空；已有网站时填写该域名的网站根目录，程序使用 webroot 验证，不停止网站。邮箱可留空。
+**MiSub / 小火箭 / v2rayN 普通订阅分发**：每台 VPS 可独立运行 `sb1` → **22**，输入自己的 TUIC 子域名，邮箱可直接回车。程序自动选择验证方式、申请公开 CA 证书并启用每日续期检查。先把域名 A 记录解析到该 VPS；Cloudflare 使用“仅 DNS”。HTTP-01 申请和续期需要放行 **80/TCP**。
+
+**不用查网站根目录**：80 端口空闲时自动独立验证；已有网站时读取宝塔、Nginx、Apache 的常见配置及 include 文件，用随机临时验证文件，通过该域名的真实 HTTP 请求确认实际目录，然后自动使用 webroot。验证后清理自己的临时文件；不停止、重载或修改网站配置，不覆盖网站内容和其他 ACME 验证文件。[Nginx root 说明](https://nginx.org/en/docs/http/ngx_http_core_module.html#root)、[Apache 虚拟主机说明](https://httpd.apache.org/docs/2.4/vhosts/name-based.html)。
+
+反向代理、容器映射、自定义配置位置、动态目录或验证路径返回重定向/403/404 时，可能无法自动识别。程序显示具体失败原因，并提供可选的手动目录；不知道可直接回车退出，原节点和网站保留。手动目录也必须通过同样的域名验证。需让 `http://你的域名/.well-known/acme-challenge/` 能直接读取该 VPS 的验证文件；错误的 A/AAAA 记录或未放行的云安全组需要先修正。
 
 配置成功后，端口及 SS/TUIC 账密保留，所有现有双模式入口改用域名 SNI，新添加的入口也自动使用该证书。菜单 **16/18** 获取更新后的 `TUIC-普通链接.txt`，把普通 `tuic://` 链接加入 MiSub；客户端使用系统 CA 验证，无需单独安装自签证书。节点仍可使用 VPS IP 连接，SNI 使用配置的域名；支持 TUIC v5 的客户端必须保留 SNI/ALPN。不要在 MiSub 开启跳过证书验证。已有订阅需更新一次。
 
@@ -78,7 +82,7 @@ socks5://账号:密码@IP:端口
 | 18 | 重新导出客户端文件 |
 | 19 | 旧中转启用双模式 |
 | 20 | 设置公网地址 |
-| 22 | 每台 VPS 独立配置域名证书及自动续期，供 MiSub 普通 TUIC 分发 |
+| 22 | 输入域名，自动识别网站目录、申请证书及续期，供 MiSub 普通 TUIC 分发 |
 
 指定中转编号是内部 20001 等端口。修改上游保留入口凭据，密码留空保留旧值。增删改仅重启对应实例，其他出口继续运行。
 

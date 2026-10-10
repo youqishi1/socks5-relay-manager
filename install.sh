@@ -4,7 +4,7 @@ set -Eeuo pipefail
 trap 'echo "错误：安装步骤失败，请检查上方的软件源、网络或文件权限错误。" >&2' ERR
 umask 077
 REPO='youqishi1/socks5-relay-manager'
-REF="${SOCKS_REPO_REF:-v1.3.1}"
+REF="${SOCKS_REPO_REF:-v1.3.2}"
 CORE_COMMIT='da99424eac4092e3722f1a5b1844cfe80478f580'
 CORE_SHA256='9541e866d9ce04d051b07aa7b7c23bf717c5bc5ef7a9f07963e31a139038faeb'
 CORE_VERSION='0.9.9.0'
@@ -226,7 +226,7 @@ fi
 "$python" - "$stage/source" <<'PY'
 import pathlib, py_compile, sys
 p = pathlib.Path(sys.argv[1])
-for name in ('install.sh', 'socks-menu.sh', 'uninstall.sh', 'VERSION', 'scripts/manager.py', 'scripts/access.py', 'scripts/certificates.py', 'scripts/client_config.py', 'scripts/platform_setup.py', 'systemd/socks-relay@.service', 'systemd/socks-access@.service'):
+for name in ('install.sh', 'socks-menu.sh', 'uninstall.sh', 'VERSION', 'scripts/manager.py', 'scripts/access.py', 'scripts/certificates.py', 'scripts/webroot.py', 'scripts/client_config.py', 'scripts/platform_setup.py', 'systemd/socks-relay@.service', 'systemd/socks-access@.service'):
     if not (p / name).is_file() or (p / name).is_symlink():
         sys.exit('错误：管理程序源码不完整或含有不安全链接。')
 for script in (p / 'scripts').glob('*.py'):
