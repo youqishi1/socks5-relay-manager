@@ -46,11 +46,11 @@ EOF
         apt-get install -y --no-install-recommends curl ca-certificates
     fi
 fi
-echo '正在下载固定版本 v1.3.2 安装包...'
+echo '正在下载固定版本 v1.3.3 安装包...'
 curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 10 --max-time 180 \
-    https://github.com/youqishi1/socks5-relay-manager/releases/download/v1.3.2/socks5-relay-manager-v1.3.2-install.tar.gz \
+    https://github.com/youqishi1/socks5-relay-manager/releases/download/v1.3.3/socks5-relay-manager-v1.3.3-install.tar.gz \
     -o "$work/install.tar.gz"
-echo "68c621bed00b5f679bc89059f11f8386ac4e79e62183087fa20f17c8e8d45a8e  $work/install.tar.gz" | sha256sum -c -
+echo "0489950fb4160c32176868900e1ba70f68433e2533a78643b1838f6092c1ccf9  $work/install.tar.gz" | sha256sum -c -
 mkdir "$work/source"
 tar -xzf "$work/install.tar.gz" -C "$work/source"
 bash "$work/source/install.sh" --local

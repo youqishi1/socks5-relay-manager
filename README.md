@@ -14,7 +14,7 @@ TCP 使用 Shadowsocks 2022，TUIC 使用 QUIC/TLS。两种入口共用公网端
 以 root 登录，普通用户先 `sudo -i`，再复制一整行：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.3.2/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.3.3/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
 ```
 
 固定版本安装包先校验 SHA-256，再执行安装。交互终端安装后自动打开菜单，以后 root 输入 `sb1`，普通用户输入 `sudo sb1`。原命令 `socks-menu` 继续可用。若 `/usr/local/bin/sb1` 已被其他程序占用，安装器拒绝覆盖。没有 curl 时先安装 `curl ca-certificates`。下载源码后在源码目录执行 `bash install.sh --local`。
@@ -59,6 +59,10 @@ socks5://账号:密码@IP:端口
 
 配置成功后，端口及 SS/TUIC 账密保留，所有现有双模式入口改用域名 SNI，新添加的入口也自动使用该证书。菜单 **16/18** 获取更新后的 `TUIC-普通链接.txt`，把普通 `tuic://` 链接加入 MiSub；客户端使用系统 CA 验证，无需单独安装自签证书。节点仍可使用 VPS IP 连接，SNI 使用配置的域名；支持 TUIC v5 的客户端必须保留 SNI/ALPN。不要在 MiSub 开启跳过证书验证。已有订阅需更新一次。
 
+**小火箭扫码（v1.3.3）**：运行 `sb1` → **23**，单节点直接显示，多节点选择对应中转。使用普通 `tuic://` 生成紧凑二维码，手机在小火箭打开扫码功能，对准终端即可导入，扫码后按回车返回菜单；二维码备注为 `TUIC-20001` 等，UUID、密码、地址、端口、SNI、ALPN、BBR 和证书验证设置保留。二维码及 PNG 均在 VPS 本地生成，不上传第三方二维码网站，也不新增常驻服务或图像依赖。
+
+PNG 保存到 `/etc/socks5-relay-manager/exports/dual/TUIC-20001-二维码.png`（对应中转编号、仅 root 可读）。二维码保留完整白边，终端用半块字符压缩高度；窗口太窄/太矮时提示最大化或调小字体，避免换行破坏二维码，也可通过 SFTP 下载 PNG。自签模式先使用菜单 **22** 配置公共 CA 域名证书，再扫码；不会为方便扫码关闭证书验证。二维码包含节点凭据，请只交给自己的客户端。小火箭实际导入由手机端完成。
+
 证书工具使用固定官方 lego 5.5.2，下载验证 SHA-256，保存在本项目 `/opt/socks5-relay-manager/acme`，不安装全局软件、不覆盖其他网站证书。证书先验证完整链、私钥、域名和有效期，再通过配置事务应用；申请失败保留现有节点。`socks-relay-cert.timer` 每天检查，证书实际变化时才重启对应实例并重新导出；证书/账号文件为 root 私有。更换域名重新运行菜单 22。若未配置域名，继续保留原来的自签证书模式。小火箭的原生 iOS 界面需要用户最终导入验证，CI 验证普通链接及实际 TUIC 核心链路。
 
 多端口文件的本机 SOCKS5 是 `127.0.0.1:20001` 等，账号密码见连接信息；一次只运行一个客户端的多端口文件，避免本机争用。新增、删除、改密码后需重新导出并导入。每个模式组仅包含相同出口的两种入口，没有跨出口自动切换或 DIRECT 回退。Clash 系统代理通过“中转出口”组选择出口。
@@ -83,6 +87,7 @@ socks5://账号:密码@IP:端口
 | 19 | 旧中转启用双模式 |
 | 20 | 设置公网地址 |
 | 22 | 输入域名，自动识别网站目录、申请证书及续期，供 MiSub 普通 TUIC 分发 |
+| 23 | 显示紧凑 TUIC 手机二维码，保存私有 PNG，供小火箭扫码 |
 
 指定中转编号是内部 20001 等端口。修改上游保留入口凭据，密码留空保留旧值。增删改仅重启对应实例，其他出口继续运行。
 

@@ -697,6 +697,20 @@ def export_dual(manager):
     directory = manager.root / 'exports' / 'dual'
     for name, contents in files.items():
         atomic(directory / name, contents)
+    # Keep QR snapshots already requested by the user in sync with credentials
+    # and certificate changes, without generating images for every unused node.
+    from tuic_qr import build, png
+    rows = {row['port']: row for row in manager.rows() if row['enabled'] and row.get('access')}
+    for path in directory.glob('TUIC-*-二维码.png'):
+        match = re.fullmatch(r'TUIC-(2[0-9]{4})-二维码\.png', path.name)
+        if not match or not path.is_file():
+            continue
+        row = rows.get(int(match.group(1)))
+        if row and row['access'].get('certificate_trust') == 'system':
+            _, code = build(row, public_address(manager))
+            atomic(path, png(code))
+        else:
+            path.unlink()
     atomic(directory / '使用说明.txt', '\n'.join([
         '加密 TCP + TUIC 使用说明',
         '通过 SSH/SFTP 下载本目录，配置含客户端凭据，勿公开或上传共享。',
@@ -777,6 +791,39 @@ def show_all_connections(manager):
         print('\n========== 第 ' + str(index) + ' 条 / 中转编号 ' + str(row['port']) + ' ==========')
         show_connection(row, manager)
     print('\n以上包含连接秘密，请勿公开。TUIC 短链接需要配套证书；一键导入文件已包含证书信任。')
+
+
+def show_tuic_qr(manager):
+    from access import AccessError
+    from tuic_qr import build, png, terminal, BORDER
+    rows = [row for row in manager.rows() if row['enabled'] and row.get('access')]
+    if not rows:
+        raise Error('暂无启用的双模式节点，请先添加节点。')
+    row = rows[0] if len(rows) == 1 else select_row(manager)
+    if not row['enabled'] or not row.get('access'):
+        raise Error('请选择已启用的双模式节点。')
+    try:
+        _, code = build(row, public_address(manager))
+    except AccessError as exc:
+        raise Error(str(exc)) from None
+    path = manager.root / 'exports' / 'dual' / ('TUIC-' + str(row['port']) + '-二维码.png')
+    atomic(path, png(code))
+    print('\nTUIC 手机扫码 / 中转 ' + str(row['port']) + ' / 证书验证开启')
+    rendered = terminal(code)
+    columns, height = shutil.get_terminal_size((80, 40))
+    try:
+        rendered.encode(sys.stdout.encoding or 'utf-8')
+        supported = True
+    except UnicodeEncodeError:
+        supported = False
+    if supported and code.get_size() + BORDER * 2 <= columns and len(rendered.splitlines()) + 7 <= height:
+        print(rendered)
+        print('小火箭 → 扫码 → 对准上方二维码，确认导入 TUIC 节点。')
+    else:
+        print('终端窗口较小或字体不支持，请最大化/调小字体后再选 23；也可通过 SFTP 下载下方 PNG 扫码。')
+    print('二维码图片：' + str(path) + '（仅 root 可读）')
+    print('二维码含节点凭据，请只分享给自己的客户端。')
+    ask('扫码完成后按回车返回菜单', '')
 
 
 def export_tuic(manager):
@@ -884,7 +931,7 @@ def menu(manager):
             state = '运行中' if enabled and running == len(enabled) else ('部分运行/异常' if running else '未运行/暂无启用代理')
             print('\n========================================\n        SOCKS5 中转管理系统\n========================================')
             print('系统状态：' + state + '\n代理数量：' + str(len(rows)) + '\n端口范围：20001-29999')
-            print('1. 一键添加加密 TCP + TUIC（粘贴整条 SOCKS5）\n2. 查看全部中转\n3. 删除 SOCKS5 中转\n4. 修改 SOCKS5 中转\n5. 检测所有代理出口 IP\n6. 检测指定代理\n7. 重启代理服务\n8. 查看运行状态\n9. 查看日志\n10. 备份配置\n11. 恢复配置\n12. 更新程序\n13. 卸载程序\n14. 高级：复用现有 TUIC 导出配置\n15. 高级：手动添加本机中转\n16. 查看全部连接信息和账密\n17. 高级：粘贴整条信息添加本机中转\n18. 重新导出双模式客户端文件\n19. 给已有中转启用加密 TCP + TUIC\n20. 设置 VPS 公网 IP/域名\n21. 高级：添加原生 SOCKS5 中转\n22. 配置域名证书（MiSub / 小火箭 / v2rayN 分发）\n0. 退出')
+            print('1. 一键添加加密 TCP + TUIC（粘贴整条 SOCKS5）\n2. 查看全部中转\n3. 删除 SOCKS5 中转\n4. 修改 SOCKS5 中转\n5. 检测所有代理出口 IP\n6. 检测指定代理\n7. 重启代理服务\n8. 查看运行状态\n9. 查看日志\n10. 备份配置\n11. 恢复配置\n12. 更新程序\n13. 卸载程序\n14. 高级：复用现有 TUIC 导出配置\n15. 高级：手动添加本机中转\n16. 查看全部连接信息和账密\n17. 高级：粘贴整条信息添加本机中转\n18. 重新导出双模式客户端文件\n19. 给已有中转启用加密 TCP + TUIC\n20. 设置 VPS 公网 IP/域名\n21. 高级：添加原生 SOCKS5 中转\n22. 配置域名证书（MiSub / 小火箭 / v2rayN 分发）\n23. 显示 TUIC 手机扫码二维码\n0. 退出')
             option = ask('请输入选项')
             if option == '0':
                 return
@@ -939,6 +986,8 @@ def menu(manager):
                 elif option == '22':
                     from certificates import configure
                     configure(manager)
+                elif option == '23':
+                    show_tuic_qr(manager)
                 elif option in ('2', '8'):
                     show_rows(manager)
                 elif option == '3':
