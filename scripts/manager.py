@@ -823,7 +823,6 @@ def show_tuic_qr(manager):
         print('终端窗口较小或字体不支持，请最大化/调小字体后再选 23；也可通过 SFTP 下载下方 PNG 扫码。')
     print('二维码图片：' + str(path) + '（仅 root 可读）')
     print('二维码含节点凭据，请只分享给自己的客户端。')
-    ask('扫码完成后按回车返回菜单', '')
 
 
 def export_tuic(manager):
@@ -952,6 +951,13 @@ def menu(manager):
             if option == '13':
                 uninstall(manager)
                 return
+            if option == '23':
+                with manager.lock():
+                    show_tuic_qr(manager)
+                # Waiting for the phone must not block certificate renewal or
+                # another SSH session's management operations.
+                ask('扫码完成后按回车返回菜单', '')
+                continue
             with manager.lock():
                 if option == '1':
                     enable_dual(manager, pasted_row(manager))
@@ -986,8 +992,6 @@ def menu(manager):
                 elif option == '22':
                     from certificates import configure
                     configure(manager)
-                elif option == '23':
-                    show_tuic_qr(manager)
                 elif option in ('2', '8'):
                     show_rows(manager)
                 elif option == '3':

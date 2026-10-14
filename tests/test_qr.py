@@ -103,13 +103,29 @@ class QRTests(unittest.TestCase):
             instance = Mock(root=Path(directory))
             instance.rows.return_value = [self.row()]
             instance.backend.active.return_value = True
-            instance.lock.side_effect = contextlib.nullcontext
+            held = [False]
+
+            @contextlib.contextmanager
+            def lock():
+                held[0] = True
+                try:
+                    yield
+                finally:
+                    held[0] = False
+
+            instance.lock.side_effect = lock
             answers = iter(['23', '', '0'])
+
+            def answer(prompt):
+                if '扫码完成后' in prompt:
+                    self.assertFalse(held[0], '等待手机扫码不能占用管理锁')
+                return next(answers)
+
             output = io.StringIO()
             with patch.object(manager, 'public_address', return_value='203.0.113.1'), \
                  patch.object(manager.shutil, 'get_terminal_size', return_value=(100, 60)), \
                  patch.object(manager, 'select_row', side_effect=AssertionError('单节点不应要求选择')), \
-                 patch('builtins.input', side_effect=lambda _: next(answers)), contextlib.redirect_stdout(output):
+                 patch('builtins.input', side_effect=answer), contextlib.redirect_stdout(output):
                 manager.menu(instance)
             path = instance.root / 'exports' / 'dual' / 'TUIC-20001-二维码.png'
             self.assertTrue(path.is_file())
