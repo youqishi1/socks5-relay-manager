@@ -5,6 +5,8 @@ import io
 import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -38,6 +40,19 @@ class QRTests(unittest.TestCase):
         return row
 
     def decode(self, image):
+        # Ubuntu 22.04's OpenCV is built without QUIRC. Use the independent
+        # ZBar reader there rather than skipping actual QR decoding.
+        if shutil.which('zbarimg'):
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'fixture.png'
+                ok, encoded = cv2.imencode('.png', image)
+                self.assertTrue(ok)
+                path.write_bytes(encoded.tobytes())
+                result = subprocess.run(['zbarimg', '--quiet', '--raw', str(path)], capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 0)
+                text = result.stdout.decode('utf-8').rstrip('\r\n')
+                self.assertTrue(text)
+                return text
         text, points, _ = cv2.QRCodeDetector().detectAndDecode(image)
         self.assertIsNotNone(points)
         self.assertTrue(text)

@@ -23,7 +23,7 @@ jobs:
       - name: Decode offline TUIC PNG and terminal QR with an independent reader
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends python3-opencv
+          sudo apt-get install -y --no-install-recommends python3-opencv zbar-tools
           python3 tests/test_qr.py
       - name: Bash syntax and ShellCheck
         run: |
