@@ -142,14 +142,17 @@ def run(manager, rows, error_type=None):
         print('此条目没有 SS/TUIC 加密入口，可选 19 启用双模式。')
         return
     port = front['port']
-    print('公网入口：' + str(port) + '/TCP（SS）与 ' + str(port) + '/UDP（TUIC）')
+    from entrance_profiles import modes, PROFILES, profile
+    enabled_modes = modes(front)
+    print('公网入口：' + str(port) + '；' + PROFILES[profile(front)])
     unit = 'socks-access@' + str(row['port']) + '.service'
-    print('入口监听归属：' + ('正常' if manager.backend.owns_listener(port, unit=unit, both=True) else '异常或端口被其他进程占用'))
+    print('入口监听归属：' + ('正常' if manager.backend.owns_listener(port, unit=unit, both=True, udp_only=profile(front) != 'compat') else '异常或端口被其他进程占用'))
     certificate(front)
     firewall(port)
     passed = []
     if upstream_ok:
-        for mode, label in (('tcp', 'SS'), ('tuic', 'TUIC')):
+        for mode in enabled_modes:
+            label = {'tcp': 'SS', 'tuic': 'TUIC', 'hysteria2': 'Hysteria 2'}[mode]
             print('正在检测 VPS 回环 ' + label + ' → 上游，保持证书验证开启...')
             try:
                 _, duration = local_entrance(manager, row, mode)
@@ -159,6 +162,7 @@ def run(manager, rows, error_type=None):
                 print(label + ' 回环连接：失败；请检查入口配置、证书/SNI、核心和服务状态。')
     else:
         print('上游未通过，暂不重复探测 SS/TUIC；先修复 SOCKS5 地址、账密或上游线路。')
-    if len(passed) == 2:
-        print('\nVPS 内部两种入口均通过。若青岛客户端仍不通，重点检查公网 TCP/UDP 放行、云安全组和客户端导入配置。')
+    if len(passed) == len(enabled_modes):
+        print('\nVPS 内部已启用入口均通过。若青岛客户端仍不通，重点检查公网 TCP/UDP 放行、云安全组和客户端导入配置。')
+    print('若 SSH 也直连失败、经其他网络却成功，请比较本地直连/代理路径，并在服务商控制台核对防火墙；本工具不会把超时直接判定为被墙。')
     print('本机监听和 VPS 回环成功都不能证明青岛公网可达；UDP 放行也不能用 TCP 测试代替。')

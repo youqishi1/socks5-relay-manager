@@ -91,6 +91,17 @@ try:
     else:
         raise AssertionError('dual service did not restart')
     print('PASS: dual service survives inner core restart and recovers from its own crash', flush=True)
+    from entrance_profiles import configure
+    from diagnostics import local_entrance
+    with manager.lock():
+        reduced = configure(manager, manager.row(dual['port']), '1')
+    assert manager.backend.owns_listener(dual['access']['port'], unit=dual_unit, udp_only=True)
+    assert not manager.backend.owns_listener(dual['access']['port'], unit=dual_unit)
+    assert local_entrance(manager, reduced, 'tuic')[0] == '127.0.0.2'
+    with manager.lock():
+        configure(manager, reduced, '3')
+    assert manager.backend.owns_listener(dual['access']['port'], unit=dual_unit, both=True)
+    print('PASS: actual systemd UDP-only transition, TUIC query and SS listener restoration', flush=True)
     for row in manager.rows():
         manager.backend.apply(row['port'], None)
     # New management process and state load, then systemd restart. This is not a VPS reboot.

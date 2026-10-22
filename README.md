@@ -9,12 +9,14 @@ Ubuntu/Debian VPS 中文管理工具，并提供 CentOS 7 x86_64 / systemd 219 �
 
 TCP 使用 Shadowsocks 2022，TUIC 使用 QUIC/TLS。两种入口共用公网端口号，分别监听 TCP/UDP。不需要预装 TUIC 或购买域名；自动证书通过客户端指纹或内嵌信任验证，默认不关闭验证和不启用 0-RTT。
 
+**可选减少公网入口**：菜单 **25** 可选“仅 TUIC”（停止 SS TCP 监听）或“仅 Hysteria 2”（公共 CA 域名证书、HTTP/3 响应、独立随机密码），也可恢复原 SS + TUIC。切换后重新导入链接或配置；升级保留现有模式。加密与 HTTP/3 响应不能保证不被识别，也不能恢复已经无法直连的 IP。[实现参考、使用方法与连通性诊断](docs/NETWORK-EXPOSURE.md)。
+
 ## 一键安装
 
 以 root 登录，普通用户先 `sudo -i`，再复制一整行：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.4.0/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.5.0/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
 ```
 
 固定版本安装包先校验 SHA-256，再执行安装。交互终端安装后自动打开菜单，以后 root 输入 `sb1`，普通用户输入 `sudo sb1`。原命令 `socks-menu` 继续可用。若 `/usr/local/bin/sb1` 已被其他程序占用，安装器拒绝覆盖。没有 curl 时先安装 `curl ca-certificates`。下载源码后在源码目录执行 `bash install.sh --local`。
@@ -102,6 +104,7 @@ PNG 保存到 `/etc/socks5-relay-manager/exports/dual/TUIC-20001-二维码.png`�
 | 20 | 设置公网地址 |
 | 22 | 输入域名，自动识别网站目录、申请证书及续期，供 MiSub 普通 TUIC 分发 |
 | 23 | 显示紧凑 TUIC 手机二维码，保存私有 PNG，供小火箭扫码 |
+| 25 | 按节点关闭 SS、选择仅 TUIC 或 Hysteria 2，或恢复原兼容模式 |
 
 指定中转编号是内部 20001 等端口。修改上游保留入口凭据，密码留空保留旧值。增删改仅重启对应实例，其他出口继续运行。
 

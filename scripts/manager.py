@@ -316,7 +316,7 @@ class Systemd:
                 self.call('restart', access_unit)
                 deadline = time.monotonic() + 8
                 while time.monotonic() < deadline:
-                    if self.call('is-active', '--quiet', access_unit, required=False) and self.owns_listener(row['access']['port'], unit=access_unit, both=True):
+                    if self.call('is-active', '--quiet', access_unit, required=False) and self.owns_listener(row['access']['port'], unit=access_unit, both=True, udp_only=row['access'].get('profile', 'compat') != 'compat'):
                         return
                     time.sleep(0.1)
                 raise Error('双模式入口未正常启动。')
@@ -331,14 +331,14 @@ class Systemd:
     def active(self, port):
         return self.call('is-active', '--quiet', self.unit(port), required=False)
 
-    def owns_listener(self, port, unit=None, both=False):
+    def owns_listener(self, port, unit=None, both=False, udp_only=False):
         # A different process occupying the port must not satisfy startup checks.
         pid = subprocess.run(['systemctl', 'show', unit or self.unit(port), '--property=MainPID'],
                              capture_output=True, text=True, timeout=5).stdout.partition('=')[2].strip()
-        sockets = subprocess.run(['ss', '-H', '-lntp', 'sport = :' + str(port)],
+        sockets = subprocess.run(['ss', '-H', '-lnup' if udp_only else '-lntp', 'sport = :' + str(port)],
                                  capture_output=True, text=True, timeout=5).stdout
         found = pid.isdecimal() and pid != '0' and re.search(r'pid=' + pid + r'[,)]', sockets) is not None
-        if both and found:
+        if both and found and not udp_only:
             udp = subprocess.run(['ss', '-H', '-lnup', 'sport = :' + str(port)], capture_output=True, text=True, timeout=5).stdout
             found = re.search(r'pid=' + pid + r'[,)]', udp) is not None
         return found
@@ -697,6 +697,10 @@ def export_dual(manager):
     directory = manager.root / 'exports' / 'dual'
     for name, contents in files.items():
         atomic(directory / name, contents)
+    # Revoke stale exported configurations when a protocol is switched off.
+    for name in ('v2rayn-tcp.json', 'v2rayn-tuic.json', 'v2rayn-hysteria2.json', 'HY2-普通链接.txt'):
+        if name not in files:
+            (directory / name).unlink(missing_ok=True)
     # Keep QR snapshots already requested by the user in sync with credentials
     # and certificate changes, without generating images for every unused node.
     from tuic_qr import build, png
@@ -706,7 +710,7 @@ def export_dual(manager):
         if not match or not path.is_file():
             continue
         row = rows.get(int(match.group(1)))
-        if row and row['access'].get('certificate_trust') == 'system':
+        if row and row['access'].get('certificate_trust') == 'system' and row['access'].get('profile') != 'hysteria2-only':
             _, code = build(row, public_address(manager))
             atomic(path, png(code))
         else:
@@ -714,7 +718,8 @@ def export_dual(manager):
     atomic(directory / '使用说明.txt', '\n'.join([
         '加密 TCP + TUIC 使用说明',
         '通过 SSH/SFTP 下载本目录，配置含客户端凭据，勿公开或上传共享。',
-        'Clash Verge：导入本地 clash-dual.yaml 并启用；每个出口的模式列表可选 TUIC 或 TCP。',
+        'Clash Verge：导入本地 clash-dual.yaml 并启用；列表只包含当前开启的协议。',
+        '菜单 25 可关闭闲置 SS，选择仅 TUIC 或仅 Hysteria 2；切换后重新导入文件或链接。HY2 使用 v2rayn-hysteria2.json 或 HY2-普通链接.txt。',
         'v2rayN：复制 v2rayN-一键导入.txt 的全部内容，从剪贴板导入两种模式。TUIC 使用保留证书的内部分享格式，需支持 ConfigVersion 4。',
         '旧版 v2rayN 不支持内部链接时，TUIC 添加自定义配置，选择 v2rayn-tuic.json，核心选择 sing-box 1.14.2 或兼容更新版，Socks 端口留空，再启用。',
         'TUIC-普通链接.txt 是常见 tuic:// 格式。使用本项目自签证书时，导入短链接还需在节点证书/Cert 字段粘贴对应 TUIC-端口-证书.pem 全文；不要关闭证书验证。',
@@ -756,14 +761,19 @@ def show_connection(row, manager=None):
         if not address:
             raise Error('尚未识别 VPS 公网地址，请设置后重新查看。')
         front = row['access']
-        print('\n双模式入口：' + address + ':' + str(front['port']) + '（TCP + UDP）')
+        from entrance_profiles import PROFILES, profile
+        print('\n加密入口：' + address + ':' + str(front['port']) + '（' + PROFILES[profile(front)] + '）')
         print('内部中转编号：' + str(row['port']) + '；状态：' + ('启用' if row['enabled'] else '停用'))
         print('本机账号：' + row['client_user'] + '；本机密码：' + row['client_password'])
-        print('SS 方法：' + METHOD + '\nSS 密钥：' + front['ss_password'])
-        print('TUIC UUID：' + front['uuid'] + '\nTUIC 密码：' + front['tuic_password'])
+        if profile(front) == 'compat':
+            print('SS 方法：' + METHOD + '\nSS 密钥：' + front['ss_password'])
+        if profile(front) != 'hysteria2-only':
+            print('TUIC UUID：' + front['uuid'] + '\nTUIC 密码：' + front['tuic_password'])
+        else:
+            print('Hysteria 2 密码：' + front['hy2_password'])
         if row['enabled']:
             print(configs([row], address)['连接信息.txt'])
-        print('请允许云安全组/防火墙中的 ' + str(front['port']) + '/TCP 和 ' + str(front['port']) + '/UDP；不要开放内部中转端口。')
+        print('请允许云安全组/防火墙中的 ' + str(front['port']) + ('/TCP 和 ' + str(front['port']) if profile(front) == 'compat' else '') + '/UDP；不要开放内部中转端口。')
         return
     # Detect local public IPv4 without any direct external HTTP/IP probe.
     address = vps_address(row)
@@ -874,8 +884,10 @@ def show_rows(manager):
         if row.get('access'):
             front = row['access']['port']
             active = manager.backend.call('is-active', '--quiet', 'socks-access@' + str(row['port']) + '.service', required=False)
-            owns = manager.backend.owns_listener(front, unit='socks-access@' + str(row['port']) + '.service', both=True)
-            print('   加密 TCP + TUIC 公网端口 ' + str(front) + ' | 双模式服务 ' + ('运行中' if active else '未运行') + ' | TCP/UDP 监听 ' + ('是' if owns else '否'))
+            from entrance_profiles import PROFILES, profile
+            chosen = profile(row['access'])
+            owns = manager.backend.owns_listener(front, unit='socks-access@' + str(row['port']) + '.service', both=True, udp_only=chosen != 'compat')
+            print('   ' + PROFILES[chosen] + ' 公网端口 ' + str(front) + ' | 入口服务 ' + ('运行中' if active else '未运行') + ' | ' + ('TCP/UDP' if chosen == 'compat' else 'UDP') + ' 监听 ' + ('是' if owns else '否'))
             print('   TUIC 证书：' + ('公共 CA | 域名 ' + row['access']['server_name'] if row['access'].get('certificate_trust') == 'system' else '自签 | MiSub 分发请配置菜单 22'))
         else:
             print('   允许来源：' + ','.join(row['sources']) + ' | 绑定地址：' + row['bind'])
@@ -930,7 +942,7 @@ def menu(manager):
             state = '运行中' if enabled and running == len(enabled) else ('部分运行/异常' if running else '未运行/暂无启用代理')
             print('\n========================================\n        SOCKS5 中转管理系统\n========================================')
             print('系统状态：' + state + '\n代理数量：' + str(len(rows)) + '\n端口范围：20001-29999')
-            print('1. 一键添加加密 TCP + TUIC（粘贴整条 SOCKS5）\n2. 查看全部中转\n3. 删除 SOCKS5 中转\n4. 修改 SOCKS5 中转\n5. 检测所有代理出口 IP\n6. 检测指定代理\n7. 重启代理服务\n8. 查看运行状态\n9. 查看日志\n10. 备份配置\n11. 恢复配置\n12. 更新程序\n13. 卸载程序\n14. 高级：复用现有 TUIC 导出配置\n15. 高级：手动添加本机中转\n16. 查看全部连接信息和账密\n17. 高级：粘贴整条信息添加本机中转\n18. 重新导出双模式客户端文件\n19. 给已有中转启用加密 TCP + TUIC\n20. 设置 VPS 公网 IP/域名\n21. 高级：添加原生 SOCKS5 中转\n22. 配置域名证书（MiSub / 小火箭 / v2rayN 分发）\n23. 显示 TUIC 手机扫码二维码\n24. 一键诊断连接（SS / TUIC / 上游 / 证书）\n0. 退出')
+            print('1. 一键添加加密 TCP + TUIC（粘贴整条 SOCKS5）\n2. 查看全部中转\n3. 删除 SOCKS5 中转\n4. 修改 SOCKS5 中转\n5. 检测所有代理出口 IP\n6. 检测指定代理\n7. 重启代理服务\n8. 查看运行状态\n9. 查看日志\n10. 备份配置\n11. 恢复配置\n12. 更新程序\n13. 卸载程序\n14. 高级：复用现有 TUIC 导出配置\n15. 高级：手动添加本机中转\n16. 查看全部连接信息和账密\n17. 高级：粘贴整条信息添加本机中转\n18. 重新导出双模式客户端文件\n19. 给已有中转启用加密 TCP + TUIC\n20. 设置 VPS 公网 IP/域名\n21. 高级：添加原生 SOCKS5 中转\n22. 配置域名证书（MiSub / 小火箭 / v2rayN 分发）\n23. 显示 TUIC 手机扫码二维码\n24. 一键诊断连接（已启用入口 / 上游 / 证书）\n25. 调整公网入口（关闭 SS / TUIC / Hysteria 2）\n0. 退出')
             option = ask('请输入选项')
             if option == '0':
                 return
@@ -991,6 +1003,21 @@ def menu(manager):
                         raise Error(str(exc)) from None
                     write_json(manager.root / 'public-address.json', {'address': address})
                     export_dual(manager)
+                elif option == '25':
+                    from entrance_profiles import configure, PROFILES, profile
+                    from access import AccessError
+                    row = select_row(manager)
+                    print('1. 仅 TUIC（关闭 SS TCP 监听）\n2. 仅 Hysteria 2（HTTP/3，需要公共 CA 域名证书）\n3. SS + TUIC（原兼容模式）\n0. 返回')
+                    choice = ask('选择入口模式')
+                    if choice == '0':
+                        continue
+                    try:
+                        changed = configure(manager, row, choice)
+                    except AccessError as exc:
+                        raise Error(str(exc)) from None
+                    export_dual(manager)
+                    print('当前入口：' + PROFILES[profile(changed['access'])] + '；已停用协议的旧链接不再有效，请重新导入。')
+                    print('只调整此节点的协议，不修改 SSH、防火墙、DNS 或其他服务；不能恢复已阻断的 IP，也不能保证不会被识别。')
                 elif option == '22':
                     from certificates import configure
                     configure(manager)
@@ -1022,8 +1049,9 @@ def menu(manager):
                             for line in lines:
                                 # Defense in depth for older imported logs.
                                 for secret in (row['upstream_password'], row['client_password'], row['upstream_user'],
-                                               *([row['access']['tuic_password'], row['access']['ss_password']] if row.get('access') else [])):
-                                    line = line.replace(secret, '********')
+                                               *([row['access']['tuic_password'], row['access']['ss_password'], row['access'].get('hy2_password', '')] if row.get('access') else [])):
+                                    if secret:
+                                        line = line.replace(secret, '********')
                                 print(line)
                 elif option == '10':
                     print('备份已保存：' + str(manager.backup()))
@@ -1038,7 +1066,7 @@ def menu(manager):
                         manager.restore(backups[index - 1])
                         print('恢复完成，启用端口的出口已验证。')
                 else:
-                    print('无效选项，请输入 0–24。')
+                    print('无效选项，请输入 0–25。')
         except Error as exc:
             print('错误：' + str(exc))
             if (manager.root / 'pending.json').exists():

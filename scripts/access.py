@@ -51,8 +51,10 @@ def system_trust(front):
 
 def validate(front):
     fields = {'port', 'ss_password', 'uuid', 'tuic_password', 'certificate', 'private_key', 'fingerprint'}
-    if not isinstance(front, dict) or set(front) not in (fields, fields | {'server_name', 'certificate_trust'}):
+    if not isinstance(front, dict) or fields - set(front) or set(front) - fields - {'server_name', 'certificate_trust', 'profile', 'hy2_password'} or (('server_name' in front) != ('certificate_trust' in front)):
         raise AccessError('双模式入口配置字段无效。')
+    from entrance_profiles import validate_profile
+    validate_profile(front)
     if 'server_name' in front:
         domain_name(front['server_name'])
         if front['certificate_trust'] != 'system':
@@ -119,7 +121,7 @@ def generate(rows, inner_port):
 
 def render(row, directory):
     front = validate(row['access'])
-    return json.dumps({
+    config = {
         'log': {'level': 'error'},
         'inbounds': [
             {'type': 'shadowsocks', 'tag': 'encrypted-tcp', 'listen': '0.0.0.0',
@@ -133,7 +135,9 @@ def render(row, directory):
                        'server_port': row['port'], 'username': row['client_user'],
                        'password': row['client_password'], 'network': 'tcp'}],
         'route': {'rules': [{'network': 'udp', 'action': 'reject'}], 'final': 'fixed-upstream'}
-    }, ensure_ascii=False, indent=2) + '\n'
+    }
+    from entrance_profiles import render_profile
+    return json.dumps(render_profile(config, front), ensure_ascii=False, indent=2) + '\n'
 
 
 def v2rayn_link(front, address, label):
@@ -159,6 +163,10 @@ def tuic_link(front, address, label):
 
 
 def configs(rows, address):
+    rows = list(rows)
+    if any(row.get('access', {}).get('profile') for row in rows):
+        from entrance_profiles import export_profiles
+        return export_profiles(rows, address)
     from urllib.parse import quote
     clash = {'mode': 'rule', 'allow-lan': False, 'log-level': 'error',
              'proxies': [], 'proxy-groups': [], 'listeners': [], 'rules': []}

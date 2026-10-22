@@ -178,9 +178,9 @@ EOF
         relay_apt install -y --no-install-recommends curl ca-certificates
     fi
 fi
-echo '正在下载固定版本 v1.4.0 安装包...'
-relay_download 'https://github.com/youqishi1/socks5-relay-manager/releases/download/v1.4.0/socks5-relay-manager-v1.4.0-install.tar.gz' \
-    '1c35b51f076a44a0ebdbba17f32cfb54d20e92a60cbbc431582c4cd16033f543' "$work/install.tar.gz"
+echo '正在下载固定版本 v1.5.0 安装包...'
+relay_download 'https://github.com/youqishi1/socks5-relay-manager/releases/download/v1.5.0/socks5-relay-manager-v1.5.0-install.tar.gz' \
+    'f87855a28925649129ea91fe90b04917dcfb95dbb34e625b9d7f02fb364419ea' "$work/install.tar.gz"
 mkdir "$work/source"
 tar -xzf "$work/install.tar.gz" -C "$work/source"
 bash "$work/source/install.sh" --local

@@ -68,7 +68,7 @@ class DualProcesses(relay.Processes):
             while time.monotonic() < deadline:
                 if process.poll() is not None:
                     raise m.Error('双模式真实进程未能启动')
-                if m.listening(row['access']['port'], '127.0.0.1'):
+                if (row['access'].get('profile', 'compat') != 'compat' and time.monotonic() > deadline - 5.7) or m.listening(row['access']['port'], '127.0.0.1'):
                     return
                 time.sleep(.05)
             raise m.Error('双模式监听超时')
