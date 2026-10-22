@@ -211,32 +211,32 @@ if [[ -z $python ]] || ! "$python" -c 'import sys,ssl; assert sys.version_info >
         fi
         "$python" -c 'import sys,ssl,fcntl,zlib,ctypes; assert sys.version_info >= (3,10); print(ssl.OPENSSL_VERSION)'
     else
-    runtime="$APP/runtime-py3.12.15-ssl3.5.9"
-    python="$runtime/python/bin/python3.12"
-    if [[ ! -f $runtime/ready ]] || ! "$python" -c 'import sys,ssl; assert sys.version_info[:3] == (3,12,15)' 2>/dev/null; then
-        echo '正在编译项目独立 Python 3.12.15 / OpenSSL 3.5.9，首次安装需要数分钟，请等待；不会替换系统 Python/OpenSSL。'
-        relay_download https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz \
-            603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a "$stage/openssl.tar.gz"
-        relay_download https://www.python.org/ftp/python/3.12.15/Python-3.12.15.tgz \
-            de1a241a519e0a3374fea98988d0b52c886743f9d953f23be8269cc7b59c5fab "$stage/python.tar.gz"
-        mkdir "$stage/openssl" "$stage/python"
-        tar -xzf "$stage/openssl.tar.gz" --strip-components=1 -C "$stage/openssl"
-        tar -xzf "$stage/python.tar.gz" --strip-components=1 -C "$stage/python"
-        install -d -m 700 "$runtime"
-        jobs=$(nproc)
-        (( jobs <= 2 )) || jobs=2
-        memory_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
-        (( memory_kb >= 1500000 )) || jobs=1
-        (cd "$stage/openssl" && ./Configure linux-x86_64 --prefix="$runtime/ssl" --libdir=lib \
-            --openssldir=/etc/pki/tls shared "-Wl,-rpath,$runtime/ssl/lib" && make -j"$jobs" && make install_sw)
-        (cd "$stage/python" && ./configure --prefix="$runtime/python" --with-openssl="$runtime/ssl" \
-            --with-openssl-rpath=auto --without-ensurepip && make -j"$jobs" && make install)
-        "$python" -c 'import ssl,sys,fcntl,hashlib; assert sys.version_info[:3] == (3,12,15); print(ssl.OPENSSL_VERSION)'
-        "$runtime/ssl/bin/openssl" version
-        chown -R root:root "$runtime"
-        chmod -R go-rwx "$runtime"
-        touch "$runtime/ready"
-    fi
+        runtime="$APP/runtime-py3.12.15-ssl3.5.9"
+        python="$runtime/python/bin/python3.12"
+        if [[ ! -f $runtime/ready ]] || ! "$python" -c 'import sys,ssl; assert sys.version_info[:3] == (3,12,15)' 2>/dev/null; then
+            echo '正在编译项目独立 Python 3.12.15 / OpenSSL 3.5.9，首次安装需要数分钟，请等待；不会替换系统 Python/OpenSSL。'
+            relay_download https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz \
+                603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a "$stage/openssl.tar.gz"
+            relay_download https://www.python.org/ftp/python/3.12.15/Python-3.12.15.tgz \
+                de1a241a519e0a3374fea98988d0b52c886743f9d953f23be8269cc7b59c5fab "$stage/python.tar.gz"
+            mkdir "$stage/openssl" "$stage/python"
+            tar -xzf "$stage/openssl.tar.gz" --strip-components=1 -C "$stage/openssl"
+            tar -xzf "$stage/python.tar.gz" --strip-components=1 -C "$stage/python"
+            install -d -m 700 "$runtime"
+            jobs=$(nproc)
+            (( jobs <= 2 )) || jobs=2
+            memory_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+            (( memory_kb >= 1500000 )) || jobs=1
+            (cd "$stage/openssl" && ./Configure linux-x86_64 --prefix="$runtime/ssl" --libdir=lib \
+                --openssldir=/etc/pki/tls shared "-Wl,-rpath,$runtime/ssl/lib" && make -j"$jobs" && make install_sw)
+            (cd "$stage/python" && ./configure --prefix="$runtime/python" --with-openssl="$runtime/ssl" \
+                --with-openssl-rpath=auto --without-ensurepip && make -j"$jobs" && make install)
+            "$python" -c 'import ssl,sys,fcntl,hashlib; assert sys.version_info[:3] == (3,12,15); print(ssl.OPENSSL_VERSION)'
+            "$runtime/ssl/bin/openssl" version
+            chown -R root:root "$runtime"
+            chmod -R go-rwx "$runtime"
+            touch "$runtime/ready"
+        fi
     fi
 fi
 "$python" --version

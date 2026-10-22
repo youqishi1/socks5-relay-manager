@@ -149,11 +149,12 @@ def unpack(archive, folder, tag):
     folder = Path(folder)
     try:
         with tarfile.open(archive, 'r:gz') as source:
-            members = source.getmembers()
-            if len(members) > 1000 or sum(m.size for m in members) > 32 * 1024 * 1024:
-                raise UpdateError('安装包展开大小异常。')
-            seen = set()
-            for member in members:
+            seen, total, count = set(), 0, 0
+            for member in source:
+                total += member.size
+                count += 1
+                if count > 1000 or total > 32 * 1024 * 1024:
+                    raise UpdateError('安装包展开大小异常。')
                 path = PurePosixPath(member.name)
                 if (not member.name or path.is_absolute() or '..' in path.parts or '\\' in member.name or ':' in member.name
                         or any(ord(c) < 32 for c in member.name) or member.name in seen
@@ -200,6 +201,9 @@ def install(manager, item, app):
         executable = Path(sys.executable).resolve()
         environment['PATH'] = str(executable.parent) + os.pathsep + environment.get('PATH', '/usr/bin:/bin')
         environment['SOCKS_REPO_REF'] = item['tag']
+        archive_config = app / 'apt-compat/apt.conf'
+        if archive_config.is_file() and 'APT_CONFIG' not in environment:
+            environment['APT_CONFIG'] = str(archive_config)
         result = subprocess.run(['bash', str(folder / 'install.sh'), '--local'], env=environment)
         if result.returncode:
             raise UpdateError('安装未完成；请查看上方错误。原有配置已备份，安装器会尝试回滚。')

@@ -15,9 +15,9 @@ case "${ID:-}" in
     centos) [[ ${VERSION_ID%%.*} == 7 ]] || { echo '错误：CentOS 目前仅兼容 7。' >&2; exit 1; } ;;
     *) echo '错误：仅支持 Ubuntu/Debian/CentOS 7 VPS。' >&2; exit 1 ;;
 esac
-command -v systemctl >/dev/null && [[ -d /run/systemd/system ]] || {
-    echo '错误：需要以 systemd 运行的完整主机。' >&2; exit 1;
-}
+if ! command -v systemctl >/dev/null || [[ ! -d /run/systemd/system ]]; then
+    echo '错误：需要以 systemd 运行的完整主机。' >&2; exit 1
+fi
 relay_preflight
 work=$(mktemp -d /tmp/socks-relay-setup-XXXXXXXX)
 cleanup() { rm -rf -- "$work"; }

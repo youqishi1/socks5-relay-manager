@@ -108,6 +108,16 @@ exit 2
         self.assertEqual(result.stdout.strip(), str(Path(sys.executable).resolve()))
         self.assertNotEqual(result.stdout.strip(), str(app / 'python3'))
 
+    def test_debian11_archives_are_scoped_and_signature_checks_preserved(self):
+        self.fake('apt-get', 'printf "%s\\n" "$@"\n')
+        result = self.run_shell('APP="$FIXTURE/app"; ID=debian; VERSION_ID=11; relay_apt update')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        sources = (self.root / 'app/apt-compat/sources.list').read_text()
+        self.assertIn('https://archive.debian.org/debian-security', sources)
+        self.assertNotIn('trusted=yes', sources)
+        self.assertNotIn('AllowUnauthenticated', (self.root / 'app/apt-compat/apt.conf').read_text())
+        self.assertIn('Dir::Etc::sourcelist=' + str(self.root / 'app/apt-compat/sources.list'), result.stdout)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

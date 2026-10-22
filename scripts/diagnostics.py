@@ -13,7 +13,8 @@ import time
 
 def command(arguments, data=None, timeout=8):
     try:
-        result = subprocess.run(arguments, input=data, text=True, capture_output=True, timeout=timeout)
+        result = subprocess.run(arguments, input=data, text=True, capture_output=True, timeout=timeout,
+                                env={**os.environ, 'LC_ALL': 'C'})
         return result.returncode, result.stdout[:65536]
     except (OSError, subprocess.TimeoutExpired):
         return -1, ''
@@ -108,11 +109,21 @@ def run(manager, rows, error_type=None):
     print('项目磁盘可用：' + str(shutil.disk_usage(manager.root).free // (1024 * 1024)) + ' MiB')
     for name in ('github.com', 'release-assets.githubusercontent.com'):
         print('DNS ' + name + '：' + ('正常' if dns_check(name) else '失败或超时（可能影响安装/更新）'))
+    if shutil.which('lslocks'):
+        code, text = command(['lslocks', '-n', '-o', 'PID,COMMAND,PATH'])
+        if code == 0:
+            locks = [line.strip() for line in text.splitlines() if '/var/lib/dpkg/' in line or '/var/lib/apt/' in line]
+            print('软件包安装锁：' + ('被占用；正常更新请等待，不要删锁文件。' if locks else '未发现占用。'))
+            for line in locks[:6]:
+                print('  ' + line)
     if not rows:
         print('还没有节点，请先选 1 添加完整 SOCKS5 信息。')
         return
     row = rows[0]
     print('\n诊断中转端口：' + str(row['port']))
+    if not row.get('enabled', True):
+        print('此条目已禁用，暂不探测出口；启用后再诊断。')
+        return
     print('内部服务：' + ('运行中' if manager.backend.active(row['port']) else '未运行'))
     print('正在检测 VPS → 内部中转 → 上游 SOCKS5 → 出口查询网站...')
     try:

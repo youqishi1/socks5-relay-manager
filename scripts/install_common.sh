@@ -19,15 +19,39 @@ relay_preflight() {
     fi
 }
 
+relay_debian_archive() {
+    local directory="$APP/apt-compat" temporary
+    [[ ! -L $directory ]] || { echo '错误：项目软件源目录不能是符号链接。' >&2; return 1; }
+    install -d -m 700 "$directory"
+    temporary=$(mktemp "$directory/.sources-XXXXXXXX")
+    # Frozen archives may have an old Valid-Until. Only archive freshness is relaxed;
+    # HTTPS, Release signatures and package hashes remain mandatory.
+    printf '%s\n' \
+        'deb [check-valid-until=no] https://archive.debian.org/debian bullseye main' \
+        'deb [check-valid-until=no] https://archive.debian.org/debian-security bullseye-security main' >"$temporary"
+    chmod 600 "$temporary"
+    mv -f -- "$temporary" "$directory/sources.list"
+    temporary=$(mktemp "$directory/.config-XXXXXXXX")
+    printf 'Dir::Etc::sourcelist "%s/sources.list";\nDir::Etc::sourceparts "-";\nDPkg::Lock::Timeout "600";\nAcquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' "$directory" >"$temporary"
+    chmod 600 "$temporary"
+    mv -f -- "$temporary" "$directory/apt.conf"
+    echo 'Debian 11：本次操作使用项目专用官方归档源，保留签名验证，不改系统源；该系统已结束常规 LTS 安全维护。'
+}
+
 relay_apt() {
     local limit=${SOCKS_LOCK_WAIT_SECONDS:-600} deadline log rc
+    local -a compatibility=()
+    if [[ ${ID:-} == debian && ( ${VERSION_ID:-} == 11 || ${VERSION_ID:-} == 11.* ) ]]; then
+        relay_debian_archive
+        compatibility=(-o "Dir::Etc::sourcelist=$APP/apt-compat/sources.list" -o 'Dir::Etc::sourceparts=-')
+    fi
     if [[ ! $limit =~ ^[0-9]{1,4}$ ]] || (( limit > 1800 )); then
         echo '错误：安装锁等待时间必须为 0–1800 秒。' >&2; return 1
     fi
     deadline=$((SECONDS + limit))
     log=$(mktemp /tmp/socks-relay-apt-XXXXXXXX)
     while true; do
-        if apt-get -o DPkg::Lock::Timeout=5 -o Acquire::Retries=3 \
+        if apt-get "${compatibility[@]}" -o DPkg::Lock::Timeout=5 -o Acquire::Retries=3 \
                 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 "$@" 2>&1 | tee "$log"; then
             rm -f -- "$log"
             return 0
@@ -91,7 +115,7 @@ relay_python() {
     for candidate in "$APP/python3" "$(command -v python3 || true)"; do
         [[ -n $candidate && -x $candidate ]] || continue
         resolved=$(readlink -f -- "$candidate") || continue
-        if "$resolved" -c 'import sys,ssl,fcntl; assert sys.version_info >= (3,10)' >/dev/null 2>&1; then
+        if "$resolved" -c 'import sys,ssl,fcntl,zlib; assert sys.version_info >= (3,10)' >/dev/null 2>&1; then
             printf '%s\n' "$resolved"
             return 0
         fi
