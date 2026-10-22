@@ -29,7 +29,11 @@ def dns_check(name):
 def local_entrance(manager, row, mode):
     import access
     from manager import free_port, health, listening, stop_process, Error
-    config = json.loads(access.configs([row], '127.0.0.1')['v2rayn-' + mode + '.json'])
+    # The public exporter correctly rejects loopback addresses. Build an ordinary
+    # export first, then redirect only this temporary diagnostic client locally.
+    config = json.loads(access.configs([row], '203.0.113.1')['v2rayn-' + mode + '.json'])
+    for outbound in config['outbounds']:
+        outbound['server'] = '127.0.0.1'
     port = free_port()
     config['inbounds'][0]['listen_port'] = port
     # Reuses the exported trust configuration; certificate checks stay enabled.

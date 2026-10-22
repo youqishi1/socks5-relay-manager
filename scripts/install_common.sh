@@ -51,7 +51,9 @@ relay_apt() {
     deadline=$((SECONDS + limit))
     log=$(mktemp /tmp/socks-relay-apt-XXXXXXXX)
     while true; do
-        if apt-get "${compatibility[@]}" -o DPkg::Lock::Timeout=5 -o Acquire::Retries=3 \
+        if apt-get "${compatibility[@]}" -o APT::Get::AllowUnauthenticated=false \
+                -o Acquire::AllowInsecureRepositories=false -o Acquire::AllowDowngradeToInsecureRepositories=false \
+                -o DPkg::Lock::Timeout=5 -o Acquire::Retries=3 \
                 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 "$@" 2>&1 | tee "$log"; then
             rm -f -- "$log"
             return 0
@@ -74,7 +76,7 @@ relay_apt() {
 }
 
 relay_download() {
-    local url=$1 digest=$2 destination=$3 cache file part
+    local url=$1 digest=$2 destination=$3 cache file part attempt downloaded=0
     [[ $url == https://* && $digest =~ ^[a-f0-9]{64}$ ]] || {
         echo '错误：下载必须使用 HTTPS 和固定 SHA-256。' >&2; return 1;
     }
@@ -92,9 +94,18 @@ relay_download() {
         return 1
     fi
     part=$(mktemp "$cache/.download-XXXXXXXX")
-    if ! curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL \
-            --connect-timeout 20 --max-time 300 --retry 3 --retry-delay 2 --retry-max-time 900 \
-            "$url" -o "$part"; then
+    for attempt in 1 2 3; do
+        if curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL \
+                --connect-timeout 20 --max-time 300 "$url" -o "$part"; then
+            downloaded=1
+            break
+        fi
+        if (( attempt < 3 )); then
+            echo "下载未完成，准备第 $((attempt + 1))/3 次尝试..."
+            sleep 2
+        fi
+    done
+    if (( downloaded == 0 )); then
         rm -f -- "$part"
         echo "错误：下载失败：$url。可重试或使用经过校验的离线缓存；未修改 DNS。" >&2
         return 1

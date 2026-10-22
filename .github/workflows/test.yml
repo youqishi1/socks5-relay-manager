@@ -104,6 +104,12 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/relay-centos-runtime.tar.gz
+            ${{ runner.temp }}/relay-centos-runtime.tar.gz.sha256
+          key: relay-centos7-python3.12.15-openssl3.5.9-3proxy0.9.9.0-v1
       - name: Install VM test tools
         run: |
           sudo apt-get update

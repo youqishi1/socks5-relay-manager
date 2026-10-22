@@ -76,6 +76,12 @@ class Updates(unittest.TestCase):
             if os.name == 'posix':
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
+    def test_partial_response_is_retried_without_trusting_partial_cache(self):
+        item = u.release(published(data=b'good'))
+        with tempfile.TemporaryDirectory() as directory, patch.object(u, 'open_url', side_effect=[io.BytesIO(b'go'), io.BytesIO(b'good')]) as fetch, patch.object(u.time, 'sleep'):
+            self.assertEqual(u.download(item, directory).read_bytes(), b'good')
+            self.assertEqual(fetch.call_count, 2)
+
     def test_archive_rejects_traversal_links_and_version_mismatch(self):
         for files, link in [({'../escape': b'x'}, False), ({'/escape': b'x'}, False),
                             ({'C:/escape': b'x'}, False), ({'scripts/manager.py': b'x'}, True),

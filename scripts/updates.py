@@ -1,5 +1,6 @@
 """Select and install verified, published releases without asking for a tag."""
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -131,11 +132,13 @@ def download(item, cache):
                     digest.update(block)
                 output.flush()
                 os.fsync(output.fileno())
-            if count != item['size'] or digest.hexdigest() != item['sha256']:
+            if count != item['size']:
+                raise OSError('incomplete download')
+            if digest.hexdigest() != item['sha256']:
                 raise UpdateError('安装包 SHA-256 校验失败，未执行。')
             os.replace(name, target)
             return target
-        except (OSError, urllib.error.URLError):
+        except (OSError, urllib.error.URLError, http.client.HTTPException):
             if attempt == 2:
                 raise UpdateError('下载更新失败；现有版本和节点保留，请稍后重试。') from None
             print('下载中断，正在重试...')
