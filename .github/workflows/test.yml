@@ -7,11 +7,15 @@ on:
         description: 'Validate published public v1.5.0 bootstrap anonymously'
         type: boolean
         default: false
+      profiles_only:
+        description: 'Run focused real UDP entrances and HTTP3 checks on Ubuntu'
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
   linux:
-    if: github.event_name != 'workflow_dispatch' || inputs.public_bootstrap != true
+    if: (github.event_name != 'workflow_dispatch' || inputs.public_bootstrap != true) && inputs.profiles_only != true
     strategy:
       fail-fast: false
       matrix:
@@ -68,8 +72,10 @@ jobs:
         run: sudo --preserve-env=SINGBOX_BINARY,MIHOMO_BINARY python3 tests/test_access.py
       - name: UDP-only entrances, real clients and independent HTTP3 masquerade
         run: |
-          sudo apt-get install -y --no-install-recommends python3-aioquic
-          sudo --preserve-env=SINGBOX_BINARY,MIHOMO_BINARY python3 tests/test_profiles.py
+          sudo apt-get install -y --no-install-recommends python3-venv
+          python3 -m venv "$RUNNER_TEMP/relay-http3"
+          "$RUNNER_TEMP/relay-http3/bin/pip" install --disable-pip-version-check aioquic==1.2.0
+          sudo --preserve-env=SINGBOX_BINARY,MIHOMO_BINARY "$RUNNER_TEMP/relay-http3/bin/python" tests/test_profiles.py
       - name: Real published rollback, upgrade and SS/TUIC diagnosis
         run: sudo env RELAY_DISPOSABLE_HOST=YES python3 tests/test_update_systemd.py
       - name: Authenticated private-repository one-command bootstrap
@@ -103,8 +109,36 @@ jobs:
           test "$(sudo cat /opt/socks5-relay-manager/current/VERSION)" = 1.5.0
       - name: Installed release real systemd and repeat-install verification
         run: sudo env RELAY_DISPOSABLE_HOST=YES python3 tests/test_systemd.py
+  profiles:
+    if: github.event_name == 'workflow_dispatch' && inputs.profiles_only == true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install actual project cores and isolated HTTP3 test dependencies
+        run: |
+          sudo bash install.sh --local
+          sudo apt-get install -y --no-install-recommends python3-venv
+          python3 -m venv "$RUNNER_TEMP/relay-http3"
+          "$RUNNER_TEMP/relay-http3/bin/pip" install --disable-pip-version-check aioquic==1.2.0
+          curl --proto '=https' --tlsv1.2 -fsSL https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-amd64-v1.19.32.gz -o "$RUNNER_TEMP/mihomo.gz"
+          echo "8451100836c9eda194331c2babfad490b2faf30cebc1a04b0e76fd8ac2d35d10  $RUNNER_TEMP/mihomo.gz" | sha256sum -c -
+          gzip -dk "$RUNNER_TEMP/mihomo.gz"
+          chmod +x "$RUNNER_TEMP/mihomo"
+          echo 'SINGBOX_BINARY=/opt/socks5-relay-manager/sing-box' >> "$GITHUB_ENV"
+          echo "MIHOMO_BINARY=$RUNNER_TEMP/mihomo" >> "$GITHUB_ENV"
+      - name: Real verified TLS, fixed exits, inactive SS and independent HTTP3
+        run: |
+          sudo --preserve-env=SINGBOX_BINARY,MIHOMO_BINARY "$RUNNER_TEMP/relay-http3/bin/python" tests/test_profiles.py
+          python3 tests/test_reachability.py
+          python3 tools/build_release.py
+          git diff --exit-code -- start.sh
   centos7:
-    if: github.event_name != 'workflow_dispatch' || inputs.public_bootstrap != true
+    if: (github.event_name != 'workflow_dispatch' || inputs.public_bootstrap != true) && inputs.profiles_only != true
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
@@ -122,7 +156,7 @@ jobs:
       - name: Original CentOS 7 kernel and systemd integration
         run: env RELAY_DISPOSABLE_HOST=YES RELAY_CENTOS_CACHE="$RUNNER_TEMP/relay-centos-runtime.tar.gz" bash tests/test-centos7-vm.sh
   debian:
-    if: github.event_name != 'workflow_dispatch' || inputs.public_bootstrap != true
+    if: (github.event_name != 'workflow_dispatch' || inputs.public_bootstrap != true) && inputs.profiles_only != true
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     strategy:
