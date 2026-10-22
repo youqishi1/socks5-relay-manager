@@ -63,6 +63,10 @@ def release(value):
     tag = value.get('tag_name', '')
     if not isinstance(tag, str) or not TAG.fullmatch(tag):
         return None
+    # Older installers hard-code the system Python/service launcher and cannot
+    # safely retain the independent runtime used by Debian 11 and CentOS 7.
+    if tuple(map(int, tag[1:].split('.'))) < (1, 3, 0):
+        return None
     name = 'socks5-relay-manager-' + tag + '-install.tar.gz'
     expected = 'https://github.com/' + REPO + '/releases/download/' + tag + '/' + name
     assets = value.get('assets')
@@ -188,6 +192,8 @@ def install(manager, item, app):
         folder = Path(temporary)
         folder.chmod(0o700)
         unpack(archive, folder, item['tag'])
+        if (manager.root / 'domain-certificate.json').exists() and not (folder / 'scripts/certificates.py').is_file():
+            raise UpdateError('所选旧版不支持现有域名证书和自动续期，已取消；请选择 v1.3.1 或更新版本。')
         # Check the selected old parser before it can replace services/configuration.
         probe = 'import sys;sys.path.insert(0,sys.argv[1]);from manager import Manager;Manager().rows()'
         try:
@@ -227,7 +233,7 @@ def menu(manager, app, ask, confirm):
                 print('当前已经是最新稳定版：' + item['tag'] + '。需要修复安装可选择历史版本列表中的当前版本。')
                 return False
         elif option == '2':
-            print('正在查询正式版本列表（排除草稿、测试版和无法校验的安装包）...')
+            print('正在查询正式版本列表（v1.3.0 起；排除测试版及不满足更新保护要求的早期版本）...')
             choices = releases()
             if not choices:
                 raise UpdateError('没有可用的正式安装包。')

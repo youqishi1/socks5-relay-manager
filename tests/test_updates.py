@@ -37,7 +37,8 @@ def archive(files, link=False):
 class Updates(unittest.TestCase):
     def test_excludes_prerelease_draft_bad_digest_and_foreign_download(self):
         self.assertEqual(u.release(published())['tag'], 'v1.4.0')
-        for field, value in [('draft', True), ('prerelease', True), ('tag_name', 'v1.4.0;id'), ('tag_name', 'v1.5.0-rc1')]:
+        self.assertIsNone(u.release(published('v1.2.2')))
+        for field, value in [('draft', True), ('prerelease', True), ('tag_name', 'v1.4.0;id'), ('tag_name', 'v1.5.0-rc1'), ('tag_name', 'v1.2.2')]:
             item = published()
             item[field] = value
             self.assertIsNone(u.release(item))
@@ -114,6 +115,7 @@ class Updates(unittest.TestCase):
             (app / 'current').mkdir()
             (app / 'current/VERSION').write_text('1.4.0')
             manager = Mock()
+            manager.root = Path(directory)
             with patch.object(u, 'latest', return_value=u.release(published())), patch.object(u, 'install') as install, contextlib.redirect_stdout(io.StringIO()):
                 self.assertFalse(u.menu(manager, app, Mock(return_value='1'), Mock()))
                 install.assert_not_called()
@@ -135,15 +137,28 @@ class Updates(unittest.TestCase):
     def test_incompatible_downgrade_does_not_backup_or_run_installer(self):
         with tempfile.TemporaryDirectory() as directory:
             manager = Mock()
+            manager.root = Path(directory)
             with patch.object(u, 'download', return_value=Path(directory) / 'input'), patch.object(u, 'unpack'), patch.object(u.subprocess, 'run', return_value=Mock(returncode=1)) as run:
                 with self.assertRaises(u.UpdateError):
                     u.install(manager, u.release(published('v1.3.3')), directory)
             self.assertEqual(run.call_count, 1)
             manager.backup.assert_not_called()
 
+    def test_domain_certificate_downgrade_is_rejected_before_service_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'domain-certificate.json').write_text('{}')
+            manager = Mock(root=root)
+            with patch.object(u, 'download', return_value=root / 'input'), patch.object(u, 'unpack'), patch.object(u.subprocess, 'run') as run:
+                with self.assertRaises(u.UpdateError):
+                    u.install(manager, u.release(published('v1.3.0')), directory)
+                run.assert_not_called()
+                manager.backup.assert_not_called()
+
     def test_installer_uses_resolved_interpreter_parent_and_local_archive(self):
         with tempfile.TemporaryDirectory() as directory:
             manager = Mock()
+            manager.root = Path(directory)
             manager.lock.return_value = contextlib.nullcontext()
             with patch.object(u, 'download', return_value=Path(directory) / 'input'), patch.object(u, 'unpack'), patch.object(u.subprocess, 'run', return_value=Mock(returncode=0)) as run:
                 u.install(manager, u.release(published('v1.3.3')), directory)
