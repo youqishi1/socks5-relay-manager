@@ -1,31 +1,128 @@
 #!/usr/bin/env bash
-# Fixed public release bootstrap. Does not accept unverified alternate sources.
+# Generated fixed-release bootstrap. Its embedded helpers match the release.
 set -Eeuo pipefail
 umask 077
+APP=/opt/socks5-relay-manager
+#!/usr/bin/env bash
+# Shared installer helpers; embedded verbatim in the standalone bootstrap.
+
+relay_preflight() {
+    local available memory
+    available=$(df -Pk /opt 2>/dev/null | awk 'NR == 2 {print $4}')
+    if [[ ! $available =~ ^[0-9]+$ ]] || (( available < 307200 )); then
+        echo '错误：/opt 所在磁盘至少需要 300 MiB 可用空间。' >&2; return 1
+    fi
+    memory=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+    echo "安装预检：可用磁盘 $((available / 1024)) MiB，内存 $((memory / 1024)) MiB。"
+    echo '遇到系统更新会等待安装锁；不会删除锁文件、终止更新进程或修改系统 DNS。'
+    if [[ ${SOCKS_OFFLINE:-0} != 1 ]] && command -v getent >/dev/null && command -v timeout >/dev/null; then
+        if timeout 8 getent ahostsv4 github.com >/dev/null 2>&1; then
+            echo '安装预检：GitHub DNS 解析正常。'
+        else
+            echo '提示：GitHub DNS 预检未通过；下载会自动重试，已有校验缓存仍可使用。'
+        fi
+    fi
+}
+
+relay_apt() {
+    local limit=${SOCKS_LOCK_WAIT_SECONDS:-600} deadline log rc
+    if [[ ! $limit =~ ^[0-9]{1,4}$ ]] || (( limit > 1800 )); then
+        echo '错误：安装锁等待时间必须为 0–1800 秒。' >&2; return 1
+    fi
+    deadline=$((SECONDS + limit))
+    log=$(mktemp /tmp/socks-relay-apt-XXXXXXXX)
+    while true; do
+        if apt-get -o DPkg::Lock::Timeout=5 -o Acquire::Retries=3 \
+                -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 "$@" 2>&1 | tee "$log"; then
+            rm -f -- "$log"
+            return 0
+        else
+            rc=${PIPESTATUS[0]}
+        fi
+        if ! grep -Eq 'Could not get lock|Unable to acquire.*lock|Unable to lock|is another process using it|Waiting for cache lock' "$log"; then
+            rm -f -- "$log"
+            echo '错误：软件包操作失败；请查看上方的软件源或下载错误。' >&2
+            return "$rc"
+        fi
+        if (( SECONDS >= deadline )); then
+            rm -f -- "$log"
+            echo '错误：系统更新仍占用安装锁，等待已结束。请稍后重试；不要删除锁文件或强杀更新进程。' >&2
+            return 1
+        fi
+        echo "系统更新正在占用安装锁，等待后自动重试（最多剩余 $((deadline - SECONDS)) 秒）..."
+        sleep 5
+    done
+}
+
+relay_download() {
+    local url=$1 digest=$2 destination=$3 cache file part
+    [[ $url == https://* && $digest =~ ^[a-f0-9]{64}$ ]] || {
+        echo '错误：下载必须使用 HTTPS 和固定 SHA-256。' >&2; return 1;
+    }
+    cache=${SOCKS_DOWNLOAD_CACHE:-/opt/socks5-relay-manager/cache/downloads}
+    [[ ! -L $cache ]] || { echo '错误：下载缓存目录不能是符号链接。' >&2; return 1; }
+    install -d -m 700 "$cache"
+    file="$cache/$digest"
+    if [[ -f $file ]] && echo "$digest  $file" | sha256sum -c - >/dev/null 2>&1; then
+        echo '复用已通过 SHA-256 校验的下载缓存。'
+        cp -- "$file" "$destination"
+        return 0
+    fi
+    if [[ ${SOCKS_OFFLINE:-0} == 1 ]]; then
+        echo "错误：离线缓存缺失或校验不通过，需要 SHA-256 $digest。" >&2
+        return 1
+    fi
+    part=$(mktemp "$cache/.download-XXXXXXXX")
+    if ! curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL \
+            --connect-timeout 20 --max-time 300 --retry 3 --retry-delay 2 --retry-max-time 900 \
+            "$url" -o "$part"; then
+        rm -f -- "$part"
+        echo "错误：下载失败：$url。可重试或使用经过校验的离线缓存；未修改 DNS。" >&2
+        return 1
+    fi
+    if ! echo "$digest  $part" | sha256sum -c -; then
+        rm -f -- "$part"
+        echo '错误：下载文件校验失败，未执行。' >&2
+        return 1
+    fi
+    chmod 600 "$part"
+    mv -f -- "$part" "$file"
+    cp -- "$file" "$destination"
+}
+
+relay_python() {
+    local candidate resolved
+    # Resolve the existing link: never replace APP/python3 by a link to itself.
+    for candidate in "$APP/python3" "$(command -v python3 || true)"; do
+        [[ -n $candidate && -x $candidate ]] || continue
+        resolved=$(readlink -f -- "$candidate") || continue
+        if "$resolved" -c 'import sys,ssl,fcntl; assert sys.version_info >= (3,10)' >/dev/null 2>&1; then
+            printf '%s\n' "$resolved"
+            return 0
+        fi
+    done
+    return 1
+}
+
 if (( EUID != 0 )); then
-    echo '错误：请先 sudo -i，再运行安装命令。' >&2
-    exit 1
+    echo '错误：请先 sudo -i，再运行安装命令。' >&2; exit 1
 fi
-if [[ ! -f /etc/os-release ]]; then
-    echo '错误：仅支持 Ubuntu/Debian/CentOS 7 VPS。' >&2
-    exit 1
-fi
+[[ -f /etc/os-release ]] || { echo '错误：无法识别系统。' >&2; exit 1; }
 # shellcheck disable=SC1091
 source /etc/os-release
 case "${ID:-}" in
     ubuntu|debian) ;;
-    centos)
-        [[ ${VERSION_ID%%.*} == 7 ]] || { echo '错误：CentOS 目前仅兼容 7。' >&2; exit 1; } ;;
+    centos) [[ ${VERSION_ID%%.*} == 7 ]] || { echo '错误：CentOS 目前仅兼容 7。' >&2; exit 1; } ;;
     *) echo '错误：仅支持 Ubuntu/Debian/CentOS 7 VPS。' >&2; exit 1 ;;
 esac
-if ! command -v systemctl >/dev/null || [[ ! -d /run/systemd/system ]]; then
-    echo '错误：需要以 systemd 运行的完整主机。' >&2
-    exit 1
-fi
+command -v systemctl >/dev/null && [[ -d /run/systemd/system ]] || {
+    echo '错误：需要以 systemd 运行的完整主机。' >&2; exit 1;
+}
+relay_preflight
 work=$(mktemp -d /tmp/socks-relay-setup-XXXXXXXX)
 cleanup() { rm -rf -- "$work"; }
 trap cleanup EXIT
-trap 'echo "错误：下载、校验或安装失败，未验证的安装包不会执行。" >&2' ERR
+trap 'echo "错误：安装未完成，请查看上方具体原因；未校验的安装包不会执行。" >&2' ERR
 trap 'exit 130' INT
 trap 'exit 143' TERM
 if ! command -v curl >/dev/null; then
@@ -42,20 +139,18 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
 EOF
         yum --setopt="reposdir=$work/repos" --disablerepo='*' --enablerepo=relay-os install -y curl ca-certificates
     else
-        apt-get update
-        apt-get install -y --no-install-recommends curl ca-certificates
+        relay_apt update
+        relay_apt install -y --no-install-recommends curl ca-certificates
     fi
 fi
-echo '正在下载固定版本 v1.3.3 安装包...'
-curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 10 --max-time 180 \
-    https://github.com/youqishi1/socks5-relay-manager/releases/download/v1.3.3/socks5-relay-manager-v1.3.3-install.tar.gz \
-    -o "$work/install.tar.gz"
-echo "0a18d127bc5911064f39292c4049485cb41fcaf721e99571bb4475c73fa0216b  $work/install.tar.gz" | sha256sum -c -
+echo '正在下载固定版本 v1.4.0 安装包...'
+relay_download 'https://github.com/youqishi1/socks5-relay-manager/releases/download/v1.4.0/socks5-relay-manager-v1.4.0-install.tar.gz' \
+    '5f265899d6ea057510fb877cd70e29509f25ad490661eef8c0956ae4a6628846' "$work/install.tar.gz"
 mkdir "$work/source"
 tar -xzf "$work/install.tar.gz" -C "$work/source"
 bash "$work/source/install.sh" --local
 if [[ -t 0 ]]; then
     sb1
 else
-    echo '安装完成。执行 sb1 打开菜单，选 1 粘贴 SOCKS5 自动部署 TCP + TUIC；旧中转选 19，凭据查看选 16。'
+    echo '安装完成。执行 sb1 打开菜单，选 1 粘贴 SOCKS5 自动部署 TCP + TUIC；更新选 12，诊断选 24。'
 fi

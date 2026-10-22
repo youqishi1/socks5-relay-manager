@@ -930,23 +930,25 @@ def menu(manager):
             state = '运行中' if enabled and running == len(enabled) else ('部分运行/异常' if running else '未运行/暂无启用代理')
             print('\n========================================\n        SOCKS5 中转管理系统\n========================================')
             print('系统状态：' + state + '\n代理数量：' + str(len(rows)) + '\n端口范围：20001-29999')
-            print('1. 一键添加加密 TCP + TUIC（粘贴整条 SOCKS5）\n2. 查看全部中转\n3. 删除 SOCKS5 中转\n4. 修改 SOCKS5 中转\n5. 检测所有代理出口 IP\n6. 检测指定代理\n7. 重启代理服务\n8. 查看运行状态\n9. 查看日志\n10. 备份配置\n11. 恢复配置\n12. 更新程序\n13. 卸载程序\n14. 高级：复用现有 TUIC 导出配置\n15. 高级：手动添加本机中转\n16. 查看全部连接信息和账密\n17. 高级：粘贴整条信息添加本机中转\n18. 重新导出双模式客户端文件\n19. 给已有中转启用加密 TCP + TUIC\n20. 设置 VPS 公网 IP/域名\n21. 高级：添加原生 SOCKS5 中转\n22. 配置域名证书（MiSub / 小火箭 / v2rayN 分发）\n23. 显示 TUIC 手机扫码二维码\n0. 退出')
+            print('1. 一键添加加密 TCP + TUIC（粘贴整条 SOCKS5）\n2. 查看全部中转\n3. 删除 SOCKS5 中转\n4. 修改 SOCKS5 中转\n5. 检测所有代理出口 IP\n6. 检测指定代理\n7. 重启代理服务\n8. 查看运行状态\n9. 查看日志\n10. 备份配置\n11. 恢复配置\n12. 更新程序\n13. 卸载程序\n14. 高级：复用现有 TUIC 导出配置\n15. 高级：手动添加本机中转\n16. 查看全部连接信息和账密\n17. 高级：粘贴整条信息添加本机中转\n18. 重新导出双模式客户端文件\n19. 给已有中转启用加密 TCP + TUIC\n20. 设置 VPS 公网 IP/域名\n21. 高级：添加原生 SOCKS5 中转\n22. 配置域名证书（MiSub / 小火箭 / v2rayN 分发）\n23. 显示 TUIC 手机扫码二维码\n24. 一键诊断连接（SS / TUIC / 上游 / 证书）\n0. 退出')
             option = ask('请输入选项')
             if option == '0':
                 return
             if option == '12':
-                ref = ask('请输入受信任的版本标签（例如 v1.0.0）')
-                if not re.fullmatch(r'v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?', ref):
-                    raise Error('只接受明确的版本标签。')
-                if confirm('更新前会备份；确认安装版本 ' + ref + '？'):
-                    with manager.lock():
-                        manager.backup()
-                    # Version is passed as environment, never shell code.
-                    result = subprocess.run(['bash', str(APP / 'current' / 'install.sh')], env={**os.environ, 'SOCKS_REPO_REF': ref})
-                    if result.returncode:
-                        raise Error('更新失败；原程序版本已保留或回滚。')
-                    print('更新完成，请执行 sb1 重新打开菜单。')
-                    return
+                from updates import menu as update_menu, UpdateError
+                try:
+                    if update_menu(manager, APP, ask, confirm):
+                        return
+                except UpdateError as exc:
+                    raise Error(str(exc)) from None
+                continue
+            if option == '24':
+                from diagnostics import run as diagnose
+                with manager.lock():
+                    candidates = manager.rows()
+                    chosen = select_row(manager) if len(candidates) > 1 else (candidates[0] if candidates else None)
+                diagnose(manager, [chosen] if chosen else [], Error)
+                ask('诊断完成，按回车返回菜单', '')
                 continue
             if option == '13':
                 uninstall(manager)
@@ -1036,7 +1038,7 @@ def menu(manager):
                         manager.restore(backups[index - 1])
                         print('恢复完成，启用端口的出口已验证。')
                 else:
-                    print('无效选项，请输入 0–22。')
+                    print('无效选项，请输入 0–24。')
         except Error as exc:
             print('错误：' + str(exc))
             if (manager.root / 'pending.json').exists():

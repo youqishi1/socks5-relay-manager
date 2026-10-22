@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# Private repositories: run through authenticated gh api, or clone then --local.
+# Install a complete verified release or a local checkout.
 set -Eeuo pipefail
 trap 'echo "错误：安装步骤失败，请检查上方的软件源、网络或文件权限错误。" >&2' ERR
 umask 077
-REPO='youqishi1/socks5-relay-manager'
-REF="${SOCKS_REPO_REF:-v1.3.3}"
 CORE_COMMIT='da99424eac4092e3722f1a5b1844cfe80478f580'
 CORE_SHA256='9541e866d9ce04d051b07aa7b7c23bf717c5bc5ef7a9f07963e31a139038faeb'
 CORE_VERSION='0.9.9.0'
@@ -12,13 +10,19 @@ ACCESS_VERSION='1.14.2'
 APP='/opt/socks5-relay-manager'
 STATE='/etc/socks5-relay-manager'
 LOG='/var/log/socks5-relay-manager'
+source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+if [[ ! -f $source_dir/scripts/install_common.sh ]]; then
+    echo '错误：请使用完整安装包中的 install.sh，或运行官方 start.sh。' >&2
+    exit 1
+fi
+# shellcheck source=scripts/install_common.sh
+source "$source_dir/scripts/install_common.sh"
 stage=''
 old_release=''
 switched=0
 completed=0
-local_mode=0
 if [[ ${1:-} == --local && $# == 1 ]]; then
-    local_mode=1
+    :
 elif (( $# )); then
     echo '错误：只接受 --local（安装当前目录源码）或无参数。' >&2
     exit 1
@@ -64,19 +68,35 @@ case "$arch" in
     riscv64) access_arch=riscv64; access_sha=7ee2d238081085a4047569b5a9f296763ede3f59742786a30a2ebc8a9f611e4f ;;
     *) echo "错误：尚未支持的 CPU 架构：$arch" >&2; exit 1 ;;
 esac
-if [[ ! $REF =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ || $REF == *..* ]]; then
-    echo '错误：仓库版本标识无效。' >&2
-    exit 1
-fi
 echo "系统：$ID ${VERSION_ID:-未知}，架构：$arch"
 case "$ID:${VERSION_ID:-}" in
-    ubuntu:22.04|ubuntu:24.04|debian:12|debian:13|centos:7|centos:7.*) ;;
+    ubuntu:22.04|ubuntu:24.04|debian:11|debian:12|debian:13|centos:7|centos:7.*) ;;
     *) echo '提示：此发行版不在主要支持范围，仍会检查依赖和启动结果。' ;;
 esac
+relay_preflight
+selected_python=$(relay_python || true)
+if [[ -z $selected_python ]]; then
+    if [[ $family == deb ]] && { [[ $ID == debian && ${VERSION_ID%%.*} -lt 11 ]] || [[ $ID == ubuntu && ${VERSION_ID%%.*} -lt 20 ]]; }; then
+        echo '错误：原生 Python 过旧的兼容安装需要 Debian 11+ 或 Ubuntu 20.04+。' >&2
+        exit 1
+    fi
+    available=$(df -Pk /opt | awk 'NR == 2 {print $4}')
+    memory_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+    if (( available < 2097152 || memory_kb < 524288 )); then
+        echo '错误：首次构建独立 Python 需要至少 2 GiB 可用磁盘和 512 MiB 内存。' >&2
+        exit 1
+    fi
+    echo '原生 Python 版本不足，将为本项目构建独立运行环境；不替换系统 Python。'
+fi
 if [[ $family == deb ]]; then
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y --no-install-recommends ca-certificates curl python3 iproute2 logrotate util-linux tar gzip openssl
+    if [[ ${SOCKS_OFFLINE:-0} != 1 ]]; then relay_apt update; fi
+    deb_options=()
+    [[ ${SOCKS_OFFLINE:-0} != 1 ]] || deb_options+=(--no-download)
+    relay_apt install "${deb_options[@]}" -y --no-install-recommends ca-certificates curl python3 iproute2 logrotate util-linux tar gzip openssl
+    if [[ -z $selected_python ]]; then
+        relay_apt install "${deb_options[@]}" -y --no-install-recommends build-essential zlib1g-dev libssl-dev libffi-dev libbz2-dev liblzma-dev libreadline-dev libsqlite3-dev
+    fi
 else
     [[ $arch == x86_64 ]] || { echo '错误：CentOS 7 兼容版仅验证 x86_64。' >&2; exit 1; }
     echo 'CentOS 7 兼容模式：使用官方归档及 RPM 签名校验；该系统已停止安全更新。'
@@ -165,22 +185,40 @@ PY
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-python=$(command -v python3 || true)
+python=$(relay_python || true)
 if [[ -z $python ]] || ! "$python" -c 'import sys,ssl; assert sys.version_info >= (3,10)' 2>/dev/null; then
-    if [[ $family != el7 ]]; then
-        echo '错误：需要 Python 3.10 或更新版本以及 SSL 支持。' >&2
-        exit 1
-    fi
+    if [[ $family == deb ]]; then
+        runtime="$APP/runtime-py3.12.15-system-ssl"
+        python="$runtime/bin/python3.12"
+        if ! "$python" -c 'import sys,ssl,fcntl,zlib,ctypes; assert sys.version_info[:3] == (3,12,15)' 2>/dev/null; then
+            echo '正在构建项目独立 Python 3.12.15；首次需要数分钟，完成后更新/重装会自动复用。'
+            relay_download https://www.python.org/ftp/python/3.12.15/Python-3.12.15.tgz \
+                de1a241a519e0a3374fea98988d0b52c886743f9d953f23be8269cc7b59c5fab "$stage/python.tar.gz"
+            mkdir "$stage/python"
+            tar -xzf "$stage/python.tar.gz" --strip-components=1 -C "$stage/python"
+            install -d -m 700 "$runtime" "$APP/build-logs"
+            jobs=$(nproc)
+            (( jobs <= 2 )) || jobs=2
+            memory_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+            (( memory_kb >= 1500000 )) || jobs=1
+            if ! (cd "$stage/python" && nice -n 10 ./configure --prefix="$runtime" --without-ensurepip \
+                    && nice -n 10 make -j"$jobs" && nice -n 10 make install) >"$APP/build-logs/python-build.log" 2>&1; then
+                tail -n 20 "$APP/build-logs/python-build.log" >&2
+                echo '错误：独立 Python 构建失败，详细日志保存在项目 build-logs/python-build.log。' >&2
+                exit 1
+            fi
+            chmod -R go-rwx "$runtime"
+        fi
+        "$python" -c 'import sys,ssl,fcntl,zlib,ctypes; assert sys.version_info >= (3,10); print(ssl.OPENSSL_VERSION)'
+    else
     runtime="$APP/runtime-py3.12.15-ssl3.5.9"
     python="$runtime/python/bin/python3.12"
     if [[ ! -f $runtime/ready ]] || ! "$python" -c 'import sys,ssl; assert sys.version_info[:3] == (3,12,15)' 2>/dev/null; then
         echo '正在编译项目独立 Python 3.12.15 / OpenSSL 3.5.9，首次安装需要数分钟，请等待；不会替换系统 Python/OpenSSL。'
-        curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 10 --max-time 300 \
-            https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz -o "$stage/openssl.tar.gz"
-        echo "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a  $stage/openssl.tar.gz" | sha256sum -c -
-        curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 10 --max-time 300 \
-            https://www.python.org/ftp/python/3.12.15/Python-3.12.15.tgz -o "$stage/python.tar.gz"
-        echo "de1a241a519e0a3374fea98988d0b52c886743f9d953f23be8269cc7b59c5fab  $stage/python.tar.gz" | sha256sum -c -
+        relay_download https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz \
+            603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a "$stage/openssl.tar.gz"
+        relay_download https://www.python.org/ftp/python/3.12.15/Python-3.12.15.tgz \
+            de1a241a519e0a3374fea98988d0b52c886743f9d953f23be8269cc7b59c5fab "$stage/python.tar.gz"
         mkdir "$stage/openssl" "$stage/python"
         tar -xzf "$stage/openssl.tar.gz" --strip-components=1 -C "$stage/openssl"
         tar -xzf "$stage/python.tar.gz" --strip-components=1 -C "$stage/python"
@@ -199,34 +237,19 @@ if [[ -z $python ]] || ! "$python" -c 'import sys,ssl; assert sys.version_info >
         chmod -R go-rwx "$runtime"
         touch "$runtime/ready"
     fi
+    fi
 fi
 "$python" --version
-if (( local_mode )); then
-    source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-    mkdir "$stage/source"
-    # Explicit source allowlist: don't copy .git, real settings, or local tools.
-    for entry in install.sh socks-menu.sh uninstall.sh VERSION scripts systemd; do
-        cp -a -- "$source_dir/$entry" "$stage/source/"
-    done
-else
-    echo '正在下载管理程序源码...'
-    if command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
-        gh api "repos/$REPO/tarball/$REF" >"$stage/manager.tar.gz"
-    else
-        # Works anonymously only if the owner later chooses to publish the repo.
-        if ! curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 10 --max-time 120 \
-            "https://api.github.com/repos/$REPO/tarball/$REF" -o "$stage/manager.tar.gz"; then
-            echo '错误：私有仓库需要 GitHub 认证。请安装 gh 并执行 gh auth login，或从已下载的源码执行 bash install.sh --local。' >&2
-            exit 1
-        fi
-    fi
-    mkdir "$stage/source"
-    tar -xzf "$stage/manager.tar.gz" --strip-components=1 -C "$stage/source"
-fi
+source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+mkdir "$stage/source"
+# Explicit source allowlist: no .git, credentials, caches or local tools.
+for entry in install.sh socks-menu.sh uninstall.sh VERSION scripts systemd; do
+    cp -a -- "$source_dir/$entry" "$stage/source/"
+done
 "$python" - "$stage/source" <<'PY'
 import pathlib, py_compile, sys
 p = pathlib.Path(sys.argv[1])
-for name in ('install.sh', 'socks-menu.sh', 'uninstall.sh', 'VERSION', 'scripts/manager.py', 'scripts/access.py', 'scripts/certificates.py', 'scripts/webroot.py', 'scripts/client_config.py', 'scripts/platform_setup.py', 'scripts/tuic_qr.py', 'scripts/qrcodegen.py', 'systemd/socks-relay@.service', 'systemd/socks-access@.service'):
+for name in ('install.sh', 'socks-menu.sh', 'uninstall.sh', 'VERSION', 'scripts/install_common.sh', 'scripts/updates.py', 'scripts/diagnostics.py', 'scripts/manager.py', 'scripts/access.py', 'scripts/certificates.py', 'scripts/webroot.py', 'scripts/client_config.py', 'scripts/platform_setup.py', 'scripts/tuic_qr.py', 'scripts/qrcodegen.py', 'systemd/socks-relay@.service', 'systemd/socks-access@.service'):
     if not (p / name).is_file() or (p / name).is_symlink():
         sys.exit('错误：管理程序源码不完整或含有不安全链接。')
 for script in (p / 'scripts').glob('*.py'):
@@ -262,9 +285,8 @@ echo '正在准备加密 TCP + TUIC 核心（固定官方版本及 SHA-256 校�
 if [[ -x $APP/sing-box && -f $APP/access-version && $(cat "$APP/access-version") == "$ACCESS_VERSION" ]]; then
     cp -- "$APP/sing-box" "$stage/sing-box"
 else
-    curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 10 --max-time 180 \
-        "https://github.com/SagerNet/sing-box/releases/download/v$ACCESS_VERSION/sing-box-$ACCESS_VERSION-linux-$access_arch.tar.gz" -o "$stage/access.tar.gz"
-    echo "$access_sha  $stage/access.tar.gz" | sha256sum -c -
+    relay_download "https://github.com/SagerNet/sing-box/releases/download/v$ACCESS_VERSION/sing-box-$ACCESS_VERSION-linux-$access_arch.tar.gz" \
+        "$access_sha" "$stage/access.tar.gz"
     mkdir "$stage/access"
     tar -xzf "$stage/access.tar.gz" -C "$stage/access"
     cp -- "$stage/access/sing-box-$ACCESS_VERSION-linux-$access_arch/sing-box" "$stage/sing-box"
@@ -300,11 +322,9 @@ else
     if [[ ! -f $stage/3proxy ]]; then
         echo "发行版源无合适核心，构建固定官方 LTS 源码 $CORE_VERSION（SHA-256 校验）。"
         if [[ $family == deb ]]; then
-            apt-get install -y --no-install-recommends build-essential
+            relay_apt install "${deb_options[@]}" -y --no-install-recommends build-essential
         fi
-        curl --proto '=https' --tlsv1.2 -fsSL --connect-timeout 10 --max-time 180 \
-            "https://codeload.github.com/3proxy/3proxy/tar.gz/$CORE_COMMIT" -o "$stage/core.tar.gz"
-        echo "$CORE_SHA256  $stage/core.tar.gz" | sha256sum -c -
+        relay_download "https://codeload.github.com/3proxy/3proxy/tar.gz/$CORE_COMMIT" "$CORE_SHA256" "$stage/core.tar.gz"
         mkdir "$stage/core"
         tar -xzf "$stage/core.tar.gz" --strip-components=1 -C "$stage/core"
         make -C "$stage/core" -f Makefile.Linux -j"$(nproc)"

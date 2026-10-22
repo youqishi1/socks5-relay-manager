@@ -14,16 +14,30 @@ TCP 使用 Shadowsocks 2022，TUIC 使用 QUIC/TLS。两种入口共用公网端
 以 root 登录，普通用户先 `sudo -i`，再复制一整行：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.3.3/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.4.0/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
 ```
 
 固定版本安装包先校验 SHA-256，再执行安装。交互终端安装后自动打开菜单，以后 root 输入 `sb1`，普通用户输入 `sudo sb1`。原命令 `socks-menu` 继续可用。若 `/usr/local/bin/sb1` 已被其他程序占用，安装器拒绝覆盖。没有 curl 时先安装 `curl ca-certificates`。下载源码后在源码目录执行 `bash install.sh --local`。
 
-支持完整 systemd 的 Ubuntu 22.04/24.04、Debian 12/13；安装时需要访问发行版源、GitHub。项目专用核心是 3proxy 0.9.9.0、sing-box 1.14.2，官方源固定校验，不改动已有 TUIC/VLESS/sing-box 服务。不使用面板、Xray 或 Docker。架构支持 x86_64、aarch64、armv7l、i686、riscv64，实际验证范围见 [测试说明](docs/TESTING.md)。
+支持完整 systemd 的 Ubuntu 22.04/24.04、Debian 11/12/13；安装时需要访问发行版源、GitHub。项目专用核心是 3proxy 0.9.9.0、sing-box 1.14.2，官方源固定校验，不改动已有 TUIC/VLESS/sing-box 服务。不使用面板、Xray 或 Docker。架构支持 x86_64、aarch64、armv7l、i686、riscv64，实际验证范围见 [测试说明](docs/TESTING.md)。
 
 CentOS 7 x86_64 使用相同命令：自动使用官方 7.9.2009 归档（HTTPS、RPM 签名校验），项目软件源文件只保存在 `/opt/socks5-relay-manager/yum-repos`，不改系统 yum 配置。原生 Python 过旧时，自动编译独立 Python 3.12.15 / OpenSSL 3.5.9 到项目目录，不覆盖 `/usr/bin/python` 或系统 OpenSSL。首次编译可能需要较长时间及额外磁盘/内存；再次安装复用独立运行环境。服务配置适配 systemd 219，保留凭据私有权限、只读程序/配置目录和服务隔离。证书生成兼容系统 OpenSSL 1.0.2。
 
 兼容安装不等于修复老系统的漏洞：CentOS 7 已于 2024-06-30 停止官方安全更新，长期使用建议迁移到受维护系统。[CentOS 官方说明](https://www.centos.org/centos-linux/)。
+
+## 安装容错、更新和连接诊断
+
+v1.4.0 安装前检查磁盘、内存和 GitHub DNS。系统自动更新占锁时最多等待 10 分钟并自动重试，不删除锁文件或终止更新进程；到时仍占锁会说明原因并退出。网络下载自动重试，只有 SHA-256 匹配的文件才保存在 `/opt/socks5-relay-manager/cache/downloads`，再次安装复用缓存。不会修改系统 DNS 或关闭 TLS 验证。
+
+Debian 11 原生 Python 3.9 不满足项目要求时，自动构建独立 Python 3.12.15（使用发行版 OpenSSL），需要至少 2 GiB 空闲磁盘和 512 MiB 内存。编译日志在项目 `build-logs`；升级和重装优先复用已经验证的项目 Python，并解析真实路径，防止 Python 链接指向自身。不替换系统 `/usr/bin/python3`。
+
+**菜单 12 更新程序**提供两个选项：**1. 更新到最新稳定版**、**2. 选择历史版本 / 重新安装**。自动读取本仓库正式 Release，排除草稿、测试版、缺少可校验安装包的版本；历史版本按编号选择，无需手填版本号。下载按 GitHub Release 资产 SHA-256 校验，回退前检查旧版能否读取当前节点配置，然后备份；兼容检查失败或取消时不修改服务。回退后菜单会恢复所选版本的功能和样式。
+
+**菜单 24 一键诊断连接**检查 DNS、内部服务、上游出口、SS/TUIC 监听、证书/SNI、相关本机防火墙规则，并在 VPS 上使用真实临时客户端验证 SS 和 TUIC。证书验证保持开启，不改原节点、防火墙或 DNS，不显示账密。多节点按编号选一条，避免重复请求所有出口。回环成功只说明 VPS 内部链路正常，无法证明青岛到 VPS 的公网、云安全组或 MiSub 导入一定正常；出口查询耗时也不是 ping。
+
+### 离线安装
+
+有完整源码包时可执行 `SOCKS_OFFLINE=1 bash install.sh --local`：不刷新 apt 索引，依赖必须已安装或在系统 apt 缓存中；项目核心和运行环境压缩包必须按文件 SHA-256 命名，放入项目 `cache/downloads`。离线缓存缺失或校验失败会退出，不跳过认证或校验。离线安装不是无需依赖的完整二进制包。
 
 ## 只填写一整条 SOCKS5
 
@@ -113,7 +127,7 @@ SS2022 使用认证加密和随机预共享密钥，保护数据机密性与完�
 
 所有写操作先备份，3proxy 配置用真实临时认证监听检查，入口配置经 sing-box 检查，再原子切换活动指针。失败回滚，崩溃事务在下次管理操作恢复；持续回滚失败保留事务并退出。
 
-备份在 `/etc/socks5-relay-manager/backups`，包含凭据，不要上传。历史版本和备份由管理员按需清理。重复安装保留数据和密码；更新短暂重启服务，失败回退旧程序、两个核心和模板。菜单 12 输入受信任的版本标签，公开仓库无需登录。
+备份在 `/etc/socks5-relay-manager/backups`，包含凭据，不要上传。历史版本和备份由管理员按需清理。重复安装保留数据和密码；更新短暂重启服务，失败回退旧程序、两个核心和模板。菜单 12 选择最新稳定版或按编号选择历史版本，公开仓库无需登录。
 
 菜单 13 或 `sudo socks-relay-uninstall`，输入 `UNINSTALL`。仅删除本项目程序及服务，默认保留配置、备份和日志，不删除系统依赖。
 
