@@ -41,6 +41,7 @@ jobs:
           python3 tests/test_install_helpers.py
           python3 tests/test_diagnostics.py
           python3 tests/test_reachability.py
+          python3 tests/test_socks_errors.py
           python3 tools/build_release.py
           git diff --exit-code -- start.sh
       - name: Actual nginx webroot discovery with an existing website
@@ -135,6 +136,7 @@ jobs:
         run: |
           sudo --preserve-env=SINGBOX_BINARY,MIHOMO_BINARY "$RUNNER_TEMP/relay-http3/bin/python" tests/test_profiles.py
           python3 tests/test_reachability.py
+          python3 tests/test_socks_errors.py
           python3 tools/build_release.py
           git diff --exit-code -- start.sh
   centos7:

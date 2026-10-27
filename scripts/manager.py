@@ -203,18 +203,26 @@ def recv(sock, count):
 
 
 def socks_auth(address, port, user, password):
+    stage = 'connect'
     try:
         with socket.create_connection((address, port), timeout=5) as sock:
             sock.settimeout(5)
+            stage = 'method'
             sock.sendall(b'\x05\x01\x02')
             if recv(sock, 2) != b'\x05\x02':
                 raise Error('SOCKS5 服务不支持所需的账号密码认证。')
             u, p = user.encode(), password.encode()
+            stage = 'auth'
             sock.sendall(b'\x01' + bytes([len(u)]) + u + bytes([len(p)]) + p)
             if recv(sock, 2) != b'\x01\x00':
                 raise Error('SOCKS5 账号或密码认证失败。')
     except socket.timeout as exc:
-        raise Error('SOCKS5 连接或认证超时。') from exc
+        messages = {
+            'connect': 'SOCKS5 TCP 建连超时（5 秒）：尚未进入账号密码认证。',
+            'method': 'SOCKS5 协议协商超时（5 秒）：TCP 已连接，但未收到认证方式响应。',
+            'auth': 'SOCKS5 账号密码认证响应超时（5 秒）：已提交认证，未收到结果；不等于密码错误。',
+        }
+        raise Error(messages[stage]) from exc
     except OSError as exc:
         raise Error('无法连接 SOCKS5 服务（连接被拒绝或网络不可达）。') from exc
 
