@@ -174,12 +174,12 @@ class Webroot(unittest.TestCase):
         manager = Mock(root=self.root)
         manager.rows.return_value = []
         settings = dict(domain=self.domain, email='', webroot=str(self.site))
-        with patch.object(m, 'ask', side_effect=[self.domain, '']) as ask, \
+        with patch.object(m, 'ask', side_effect=[self.domain, '', '1']) as ask, \
              patch.object(w, 'detect', return_value=str(self.site)), \
              patch.object(c, 'obtain', return_value=('cert', 'key', 'fingerprint')) as obtain, \
              patch.object(c, 'apply_material', return_value=0), patch.object(c, 'install_timer'):
             c.configure(manager)
-        self.assertEqual(ask.call_count, 2)
+        self.assertEqual(ask.call_count, 3)
         obtain.assert_called_once_with(m.APP, settings)
         self.assertEqual(m.read_json(self.root / c.SETTING), settings)
 
@@ -187,7 +187,7 @@ class Webroot(unittest.TestCase):
         manager = Mock(root=self.root)
         previous = dict(domain='previous.example.test', email='', webroot='')
         m.write_json(self.root / c.SETTING, previous)
-        with patch.object(m, 'ask', side_effect=[self.domain, '', '']), \
+        with patch.object(m, 'ask', side_effect=[self.domain, '', '1', '']), \
              patch.object(w, 'detect', side_effect=access.AccessError('fixture failure')) as detect, \
              patch.object(c, 'obtain') as obtain, patch.object(c, 'install_timer') as timer:
             with self.assertRaises(m.Error):

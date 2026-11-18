@@ -1,0 +1,26 @@
+name: Certificate release upgrade
+on:
+  push:
+    branches: [release/v1.5.1-certificates, main]
+permissions:
+  contents: read
+jobs:
+  upgrade:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and check the exact release package
+        run: |
+          python3 tools/build_release.py
+          git diff --exit-code -- start.sh
+          python3 tests/test_updates.py
+      - name: Install the public v1.5.0 baseline
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.5.0/start.sh -o "$RUNNER_TEMP/baseline.sh"
+          sudo bash "$RUNNER_TEMP/baseline.sh"
+          test "$(sudo cat /opt/socks5-relay-manager/current/VERSION)" = 1.5.0
+      - name: Upgrade a real configured node through the menu installer
+        run: sudo env RELAY_DISPOSABLE_HOST=YES python3 tests/test_update_systemd.py
+      - name: Exercise certificate issuance on Linux
+        run: sudo env RELAY_DISPOSABLE_HOST=YES bash tests/test-acme.sh

@@ -56,13 +56,13 @@ try:
     assert manager.rows() == original
     assert subprocess.check_output(['systemctl', 'show', 'socks-access@' + str(row['port']) + '.service', '-p', 'MainPID']) == before_pid
     print('PASS: real SS/TUIC diagnostic connections preserve all credentials and server PID', flush=True)
-    old = updates.release(updates.metadata('/releases/tags/v1.3.3'))
+    old = updates.release(updates.metadata('/releases/tags/v1.5.0'))
     assert old
     updates.install(manager, old, app)
-    assert (app / 'current/VERSION').read_text().strip() == '1.3.3'
+    assert (app / 'current/VERSION').read_text().strip() == '1.5.0'
     assert manager.rows() == original
     assert manager.verify(row)[0] == '127.0.0.2'
-    print('PASS: actual published v1.3.3 downgrade preserves authenticated live relay and private Python', flush=True)
+    print('PASS: actual published v1.5.0 installation preserves authenticated live relay and private Python', flush=True)
     updates.install(manager, selected, app)
     assert (app / 'current/VERSION').read_text().strip() == selected['tag'][1:]
     assert manager.rows() == original

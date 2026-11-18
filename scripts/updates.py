@@ -192,12 +192,16 @@ def install(manager, item, app):
         folder = Path(temporary)
         folder.chmod(0o700)
         unpack(archive, folder, item['tag'])
-        if (manager.root / 'domain-certificate.json').exists() and not (folder / 'scripts/certificates.py').is_file():
+        certificate_settings = manager.root / 'domain-certificate.json'
+        if certificate_settings.exists() and not (folder / 'scripts/certificates.py').is_file():
             raise UpdateError('所选旧版不支持现有域名证书和自动续期，已取消；请选择 v1.3.1 或更新版本。')
         # Check the selected old parser before it can replace services/configuration.
         probe = 'import sys;sys.path.insert(0,sys.argv[1]);from manager import Manager;Manager().rows()'
+        if certificate_settings.exists():
+            probe += (';from manager import read_json;from pathlib import Path;'
+                      'from certificates import validate_settings;validate_settings(read_json(Path(sys.argv[2])))')
         try:
-            result = subprocess.run([sys.executable, '-c', probe, str(folder / 'scripts')],
+            result = subprocess.run([sys.executable, '-c', probe, str(folder / 'scripts'), str(certificate_settings)],
                                     capture_output=True, timeout=20)
         except (OSError, subprocess.TimeoutExpired):
             raise UpdateError('目标版本的配置兼容检查未完成，已取消。') from None

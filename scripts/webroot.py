@@ -17,6 +17,10 @@ import tempfile
 
 from access import AccessError, domain_name
 
+
+class HTTPPathUnavailable(AccessError):
+    """No usable route for the HTTP-01 token could be prepared."""
+
 CONFIGS = (
     '/etc/nginx/nginx.conf', '/etc/nginx/conf.d/*', '/etc/nginx/sites-enabled/*',
     '/usr/local/nginx/conf/nginx.conf', '/www/server/nginx/conf/nginx.conf',
@@ -202,6 +206,8 @@ def fetch(domain, name, port=80):
                 '-sS', '-o', str(body), '-w', '%{http_code}', url],
                 capture_output=True, timeout=10)
             status = result.stdout.decode('ascii', errors='replace').strip()
+            if result.returncode in (7, 28):
+                raise HTTPPathUnavailable('无法连接域名的 HTTP 验证路径：检查 TCP 80 和云安全组。')
             if result.returncode:
                 raise AccessError('域名 HTTP 验证请求失败：检查 A/AAAA 解析、TCP 80 和云安全组。')
             if status != '200':
@@ -234,7 +240,7 @@ def detect(domain, preferred='', port=80, roots=None):
             except (OSError, ValueError):
                 continue
         if not staged:
-            raise AccessError('80 端口已占用，未找到可验证的网站目录。支持宝塔/Nginx/Apache；'
+            raise HTTPPathUnavailable('80 端口已占用，未找到可验证的网站目录。支持宝塔/Nginx/Apache；'
                 '容器或纯反向代理网站需提供可公开访问的 HTTP-01 目录。')
         content = fetch(domain, name, port)
         if content not in staged:

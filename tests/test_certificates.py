@@ -2,12 +2,14 @@
 import base64
 import copy
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import ssl
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -17,6 +19,148 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import access as a
 import certificates as c
 import manager as m
+
+
+class CertificateToolFailures(unittest.TestCase):
+    def test_manual_dns_bypasses_both_ports_and_uses_terminal(self):
+        app = Path('unused')
+        settings = dict(domain='tuic.example.test', email='', webroot='', challenge=c.DNS01)
+        with patch.object(c.sys.stdin, 'isatty', return_value=True), \
+             patch.object(c, 'check_binding') as bind, patch.object(c, 'ensure_client', return_value=app / 'lego'), \
+             patch.object(c.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run, \
+             patch.object(c, 'load_material', return_value=('cert', 'key', 'fingerprint')):
+            self.assertEqual(c.obtain(app, settings), ('cert', 'key', 'fingerprint'))
+        bind.assert_not_called()
+        self.assertEqual(run.call_args.args[0][-2:], ['--dns', 'manual'])
+        self.assertNotIn('--http', run.call_args.args[0])
+        self.assertNotIn('--tls', run.call_args.args[0])
+        self.assertNotIn('capture_output', run.call_args.kwargs)
+
+    def test_manual_mode_does_not_wait_for_input_from_renewal_timer(self):
+        with tempfile.TemporaryDirectory() as folder:
+            manager = Mock(root=Path(folder))
+            m.write_json(manager.root / c.SETTING,
+                         dict(domain='tuic.example.test', email='', webroot='', challenge=c.DNS01))
+            with patch.object(c, 'obtain') as obtain:
+                c.renew(manager)
+            obtain.assert_not_called()
+            manager.apply.assert_not_called()
+
+    def test_interrupted_download_retries_from_clean_file_and_verifies_archive(self):
+        package = io.BytesIO()
+        with tarfile.open(fileobj=package, mode='w:gz') as stream:
+            member = tarfile.TarInfo('lego')
+            member.size = 3
+            stream.addfile(member, io.BytesIO(b'bin'))
+        archive_bytes = package.getvalue()
+        with tempfile.TemporaryDirectory() as folder:
+            app = Path(folder)
+            calls = []
+
+            def download(command, **kwargs):
+                archive = Path(command[-1])
+                self.assertFalse(archive.exists(), 'a retry must discard the partial archive')
+                self.assertEqual(command[command.index('--proto-redir') + 1], '=https')
+                calls.append(command)
+                archive.write_bytes(b'partial' if len(calls) == 1 else archive_bytes)
+                if len(calls) == 1:
+                    raise subprocess.TimeoutExpired(command, kwargs['timeout'])
+                return subprocess.CompletedProcess(command, 0)
+
+            with patch.object(c.platform, 'machine', return_value='x86_64'), \
+                 patch.dict(c.LEGO_HASHES, amd64=hashlib.sha256(archive_bytes).hexdigest()), \
+                 patch.object(c.subprocess, 'run', side_effect=download):
+                self.assertEqual(c.ensure_client(app).read_bytes(), b'bin')
+                self.assertEqual(c.ensure_client(app).read_bytes(), b'bin')
+                self.assertEqual(len(calls), 2)
+
+    def test_bad_hash_or_malformed_archive_never_replaces_tool(self):
+        for valid_hash, expected in ((False, 'SHA-256'), (True, '无法解包')):
+            with self.subTest(valid_hash=valid_hash), tempfile.TemporaryDirectory() as folder:
+                app = Path(folder)
+                def download(url, archive):
+                    archive.write_bytes(b'not a tarball')
+                digest = hashlib.sha256(b'not a tarball').hexdigest() if valid_hash else '0' * 64
+                with patch.object(c.platform, 'machine', return_value='x86_64'), \
+                     patch.dict(c.LEGO_HASHES, amd64=digest), patch.object(c, 'download_lego', side_effect=download):
+                    with self.assertRaisesRegex(a.AccessError, expected):
+                        c.ensure_client(app)
+                self.assertFalse((app / 'acme' / 'lego').exists())
+
+    def test_permanent_download_failure_is_not_retried_or_printed_raw(self):
+        response = subprocess.CompletedProcess([], 60, stderr=b'PRIVATE_PROXY_DETAIL')
+        with patch.object(c.subprocess, 'run', return_value=response) as run:
+            with self.assertRaisesRegex(a.AccessError, 'HTTPS 证书校验失败') as caught:
+                c.download_lego('https://example.test/file', Path('unused'))
+        run.assert_called_once()
+        self.assertNotIn('PRIVATE_PROXY_DETAIL', str(caught.exception))
+
+    def test_acme_refusal_uses_safe_phase_specific_messages(self):
+        cases = [
+            (b'urn:ietf:params:acme:error:dns', '未能解析域名'),
+            (b'urn:ietf:params:acme:error:unauthorized: Invalid response', 'HTTP-01 验证失败'),
+            (b'urn:ietf:params:acme:error:rateLimited', '频率限制'),
+            (b'Get https://ca.test/directory: dial tcp: i/o timeout', 'HTTPS 接口'),
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            app = Path(folder)
+            settings = dict(domain='tuic.example.test', email='', webroot=folder)
+            for detail, expected in cases:
+                with self.subTest(detail=detail), patch.object(c, 'ensure_client', return_value=app / 'lego'), \
+                     patch.object(c.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                         [], 1, stdout=b'', stderr=detail + b' PRIVATE_CHALLENGE_TOKEN')), \
+                     patch.object(c, 'load_material') as load:
+                    with self.assertRaisesRegex(a.AccessError, expected) as caught:
+                        c.obtain(app, settings)
+                    load.assert_not_called()
+                    self.assertNotIn('PRIVATE_CHALLENGE_TOKEN', str(caught.exception))
+
+    def test_alpn_fallback_does_not_take_occupied_443_or_persist_failure(self):
+        settings = dict(domain='tuic.example.test', email='', webroot='')
+        denied = a.AccessError('本机 TCP 443 已被占用')
+        failed_http = subprocess.CompletedProcess([], 1, stdout=b'',
+            stderr=b'urn:ietf:params:acme:error:connection :: Timeout during connect')
+        with patch.object(c, 'check_binding', side_effect=[None, denied]) as binding, \
+             patch.object(c, 'ensure_client', return_value=Path('lego')), \
+             patch.object(c.subprocess, 'run', return_value=failed_http) as run, \
+             patch.object(c, 'load_material') as load:
+            with self.assertRaisesRegex(a.AccessError, '443 已被占用'):
+                c.obtain(Path('unused'), settings)
+        self.assertEqual([call.args[0] for call in binding.call_args_list], [80, 443])
+        run.assert_called_once()
+        load.assert_not_called()
+        self.assertNotIn('challenge', settings)
+
+    def test_renew_remembers_successful_fallback(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            settings = dict(domain='tuic.example.test', email='', webroot='')
+            m.write_json(root / c.SETTING, settings)
+            failed_http = subprocess.CompletedProcess([], 1, stdout=b'',
+                stderr=b'urn:ietf:params:acme:error:connection :: Timeout during connect')
+            success = subprocess.CompletedProcess([], 0)
+            manager = Mock(root=root)
+            manager.rows.return_value = []
+            with patch.object(c, 'check_binding'), patch.object(c, 'ensure_client', return_value=root / 'lego'), \
+                 patch.object(c.subprocess, 'run', side_effect=[failed_http, success, success]) as run, \
+                 patch.object(c, 'load_material', return_value=('cert', 'key', 'fingerprint')):
+                c.renew(manager)
+                c.renew(manager)
+            self.assertEqual(m.read_json(root / c.SETTING)['challenge'], c.TLS01)
+            self.assertEqual([('--http' in call.args[0], '--tls' in call.args[0]) for call in run.call_args_list],
+                             [(True, False), (False, True), (False, True)])
+
+    def test_fallback_renewal_noop_does_not_remember_unverified_mode(self):
+        with tempfile.TemporaryDirectory() as folder:
+            app = Path(folder)
+            settings = dict(domain='tuic.example.test', email='', webroot='')
+            cert, _ = c.material_paths(app, settings['domain'])
+            cert.parent.mkdir(parents=True)
+            cert.write_bytes(b'existing certificate')
+            material = ('existing certificate', 'existing key', 'fingerprint')
+            with patch.object(c, '_obtain', side_effect=[c.HTTPUnavailable('80 busy'), material]):
+                self.assertEqual(c.obtain(app, settings, renew=True), material)
+            self.assertNotIn('challenge', settings)
 
 
 class CertificateTests(unittest.TestCase):
@@ -112,7 +256,7 @@ class CertificateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             manager = Mock(root=Path(folder))
             manager.rows.return_value = [self.row()]
-            with patch.object(m, 'ask', side_effect=[self.domain, '']), \
+            with patch.object(m, 'ask', side_effect=[self.domain, '', '1']), \
                  patch('webroot.detect', return_value=''), \
                  patch.object(c, 'obtain', side_effect=a.AccessError('fixture issuance failure')), \
                  patch.object(c, 'install_timer') as timer:
@@ -121,6 +265,18 @@ class CertificateTests(unittest.TestCase):
             manager.apply.assert_not_called()
             timer.assert_not_called()
             self.assertFalse((manager.root / c.SETTING).exists())
+
+    def test_menu_manual_choice_bypasses_webroot_and_disables_automatic_renewal(self):
+        with tempfile.TemporaryDirectory() as folder:
+            manager = Mock(root=Path(folder))
+            manager.rows.return_value = []
+            with patch.object(m, 'ask', side_effect=[self.domain, '', '2']), patch('webroot.detect') as detect, \
+                 patch.object(c, 'obtain', return_value=('cert', 'key', 'fingerprint')), \
+                 patch.object(c, 'install_timer') as timer:
+                c.configure(manager)
+            self.assertEqual(m.read_json(manager.root / c.SETTING)['challenge'], c.DNS01)
+            detect.assert_not_called()
+            timer.assert_not_called()
 
     def test_domains_settings_and_command_cannot_inject_options(self):
         for value in ['../test', '--domain.test', 'test\n.example', '203.0.113.1', '*.example.com', 'https://example.com']:
