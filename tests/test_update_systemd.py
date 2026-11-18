@@ -56,8 +56,12 @@ try:
     assert manager.rows() == original
     assert subprocess.check_output(['systemctl', 'show', 'socks-access@' + str(row['port']) + '.service', '-p', 'MainPID']) == before_pid
     print('PASS: real SS/TUIC diagnostic connections preserve all credentials and server PID', flush=True)
-    old = updates.release(updates.metadata('/releases/tags/v1.5.0'))
-    assert old
+    # CI runners share anonymous API quotas. Pin the published old package
+    # without skipping its real HTTPS download, size, or digest verification.
+    old = dict(tag='v1.5.0', size=122966,
+               sha256='b9b46dceb8b610f38d792f6ed63bedf9a2c6af2f89a4ece239a1ee5ce24f73ed',
+               url='https://github.com/' + updates.REPO +
+                   '/releases/download/v1.5.0/socks5-relay-manager-v1.5.0-install.tar.gz')
     updates.install(manager, old, app)
     assert (app / 'current/VERSION').read_text().strip() == '1.5.0'
     assert manager.rows() == original
