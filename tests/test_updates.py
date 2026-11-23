@@ -138,6 +138,7 @@ class Updates(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             manager = Mock()
             manager.root = Path(directory)
+            manager.rows.return_value = []
             with patch.object(u, 'download', return_value=Path(directory) / 'input'), patch.object(u, 'unpack'), patch.object(u.subprocess, 'run', return_value=Mock(returncode=1)) as run:
                 with self.assertRaises(u.UpdateError):
                     u.install(manager, u.release(published('v1.3.3')), directory)
@@ -149,9 +150,21 @@ class Updates(unittest.TestCase):
             root = Path(directory)
             (root / 'domain-certificate.json').write_text('{}')
             manager = Mock(root=root)
+            manager.rows.return_value = []
             with patch.object(u, 'download', return_value=root / 'input'), patch.object(u, 'unpack'), patch.object(u.subprocess, 'run') as run:
                 with self.assertRaises(u.UpdateError):
                     u.install(manager, u.release(published('v1.3.0')), directory)
+                run.assert_not_called()
+                manager.backup.assert_not_called()
+
+    def test_shared_downgrade_requires_return_to_independent_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manager = Mock(root=root)
+            manager.rows.return_value = [{'port': 20001, 'shared': True}]
+            with patch.object(u, 'download', return_value=root / 'input'), patch.object(u, 'unpack'), patch.object(u.subprocess, 'run') as run:
+                with self.assertRaisesRegex(u.UpdateError, '菜单 26'):
+                    u.install(manager, u.release(published('v1.5.1')), root)
                 run.assert_not_called()
                 manager.backup.assert_not_called()
 
@@ -159,6 +172,7 @@ class Updates(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             manager = Mock()
             manager.root = Path(directory)
+            manager.rows.return_value = []
             manager.lock.return_value = contextlib.nullcontext()
             with patch.object(u, 'download', return_value=Path(directory) / 'input'), patch.object(u, 'unpack'), patch.object(u.subprocess, 'run', return_value=Mock(returncode=0)) as run:
                 u.install(manager, u.release(published('v1.3.3')), directory)

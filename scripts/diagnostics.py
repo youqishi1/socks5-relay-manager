@@ -143,9 +143,10 @@ def run(manager, rows, error_type=None):
         return
     port = front['port']
     from entrance_profiles import modes, PROFILES, profile
+    from shared_access import unit_for
     enabled_modes = modes(front)
     print('公网入口：' + str(port) + '；' + PROFILES[profile(front)])
-    unit = 'socks-access@' + str(row['port']) + '.service'
+    unit = unit_for(row)
     print('入口监听归属：' + ('正常' if manager.backend.owns_listener(port, unit=unit, both=True, udp_only=profile(front) != 'compat') else '异常或端口被其他进程占用'))
     certificate(front)
     firewall(port)

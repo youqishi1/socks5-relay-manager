@@ -1,0 +1,33 @@
+[Unit]
+Description=Shared encrypted entrances for SOCKS5 Relay Manager
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/socks5-relay-manager/current/scripts/manager.py shared-access-run
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+KillMode=control-group
+LimitNOFILE=65536
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+ReadWritePaths=/var/log/socks5-relay-manager
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

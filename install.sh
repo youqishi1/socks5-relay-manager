@@ -134,6 +134,10 @@ cleanup() {
     local rc=$?
     if (( completed == 0 )); then
         if (( switched )); then
+            if [[ -f /etc/systemd/system/socks-access-shared.service ]]; then
+                systemctl stop socks-access-shared.service || true
+                systemctl disable socks-access-shared.service || true
+            fi
             if [[ -n $old_release ]]; then
                 ln -s "$old_release" "$APP/current.rollback"
                 mv -Tf "$APP/current.rollback" "$APP/current"
@@ -155,6 +159,11 @@ cleanup() {
             else
                 rm -f -- /etc/systemd/system/socks-access@.service
             fi
+            if [[ -f $stage/old-shared-unit ]]; then
+                install -m 644 "$stage/old-shared-unit" /etc/systemd/system/socks-access-shared.service
+            else
+                rm -f -- /etc/systemd/system/socks-access-shared.service
+            fi
             if [[ -f $stage/old-access-core ]]; then
                 install -m 755 "$stage/old-access-core" "$APP/sing-box"
             else
@@ -169,8 +178,11 @@ import sys
 sys.path.insert(0, sys.argv[1])
 from manager import Manager
 m = Manager()
-for row in m.rows():
-    m.backend.apply(row['port'], row)
+if hasattr(m, 'restart_installed'):
+    m.restart_installed()
+else:
+    for row in m.rows():
+        m.backend.apply(row['port'], row)
 PY
             fi
         fi
@@ -254,6 +266,9 @@ for name in ('install.sh', 'socks-menu.sh', 'uninstall.sh', 'VERSION', 'scripts/
         sys.exit('错误：管理程序源码不完整或含有不安全链接。')
 for script in (p / 'scripts').glob('*.py'):
     py_compile.compile(str(script), doraise=True)
+for name in ('scripts/shared_access.py', 'systemd/socks-access-shared.service'):
+    if not (p / name).is_file() or (p / name).is_symlink():
+        sys.exit('错误：共享入口文件不完整或含有不安全链接。')
 PY
 bash -n "$stage/source/install.sh" "$stage/source/socks-menu.sh" "$stage/source/uninstall.sh"
 if [[ -L $APP/current ]]; then
@@ -261,6 +276,7 @@ if [[ -L $APP/current ]]; then
     cp -- /etc/systemd/system/socks-relay@.service "$stage/old-unit"
     cp -- "$APP/3proxy" "$stage/old-core"
     [[ ! -f /etc/systemd/system/socks-access@.service ]] || cp -- /etc/systemd/system/socks-access@.service "$stage/old-access-unit"
+    [[ ! -f /etc/systemd/system/socks-access-shared.service ]] || cp -- /etc/systemd/system/socks-access-shared.service "$stage/old-shared-unit"
     [[ ! -f $APP/sing-box ]] || cp -- "$APP/sing-box" "$stage/old-access-core"
     "$python" - "$APP/current/scripts" <<'PY'
 import sys
@@ -274,7 +290,7 @@ elif [[ -e $APP/current ]]; then
     echo '错误：项目 current 路径不是预期的版本链接，请先检查。' >&2
     exit 1
 else
-    for target in /etc/systemd/system/socks-relay@.service /etc/systemd/system/socks-access@.service /etc/logrotate.d/socks5-relay-manager /usr/local/bin/socks-menu /usr/local/bin/socks-relay-uninstall; do
+    for target in /etc/systemd/system/socks-relay@.service /etc/systemd/system/socks-access@.service /etc/systemd/system/socks-access-shared.service /etc/logrotate.d/socks5-relay-manager /usr/local/bin/socks-menu /usr/local/bin/socks-relay-uninstall; do
         if [[ -e $target ]]; then
             echo "错误：路径已存在，拒绝覆盖其他程序：$target" >&2
             exit 1
@@ -367,6 +383,7 @@ ln -s "$release" "$APP/current.new"
 mv -Tf "$APP/current.new" "$APP/current"
 install -m 644 "$stage/units/socks-relay@.service" /etc/systemd/system/socks-relay@.service
 install -m 644 "$stage/units/socks-access@.service" /etc/systemd/system/socks-access@.service
+install -m 644 "$stage/units/socks-access-shared.service" /etc/systemd/system/socks-access-shared.service
 # Explicitly recreate both standard error/access logs with private permissions.
 "$python" - "$APP/current/scripts" <<'PY'
 import sys, os
@@ -387,8 +404,7 @@ import sys
 sys.path.insert(0, sys.argv[1])
 from manager import Manager
 m = Manager()
-for row in m.rows():
-    m.backend.apply(row['port'], row)
+m.restart_installed()
 PY
 # Only install public entrypoints after the program has passed startup checks.
 install -m 755 "$release/socks-menu.sh" /usr/local/bin/socks-menu

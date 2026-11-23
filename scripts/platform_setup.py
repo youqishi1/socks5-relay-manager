@@ -33,5 +33,5 @@ if __name__ == '__main__':
     if not Path(python).is_absolute() or not python.replace('/', '').replace('-', '').replace('.', '').replace('_', '').isalnum():
         raise SystemExit('错误：Python 路径无效。')
     Path(destination).mkdir(mode=0o700, exist_ok=True)
-    for name in ('socks-relay@.service', 'socks-access@.service'):
+    for name in ('socks-relay@.service', 'socks-access@.service', 'socks-access-shared.service'):
         Path(destination, name).write_text(render(Path(source, name).read_text(), python, int(version)))

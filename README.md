@@ -16,7 +16,7 @@ TCP 使用 Shadowsocks 2022，TUIC 使用 QUIC/TLS。两种入口共用公网端
 以 root 登录，普通用户先 `sudo -i`，再复制一整行：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.5.1/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.5.2/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
 ```
 
 固定版本安装包先校验 SHA-256，再执行安装。交互终端安装后自动打开菜单，以后 root 输入 `sb1`，普通用户输入 `sudo sb1`。原命令 `socks-menu` 继续可用。若 `/usr/local/bin/sb1` 已被其他程序占用，安装器拒绝覆盖。没有 curl 时先安装 `curl ca-certificates`。下载源码后在源码目录执行 `bash install.sh --local`。
@@ -36,6 +36,8 @@ Debian 11 使用项目专用官方归档源，文件仅保存在项目 `apt-comp
 **菜单 12 更新程序**提供两个选项：**1. 更新到最新稳定版**、**2. 选择历史版本 / 重新安装**。自动读取本仓库正式 Release，历史列表从 v1.3.0 起（更早安装器不支持独立 Python/新服务启动流程），排除草稿、测试版、缺少可校验安装包的版本；历史版本按编号选择，无需手填版本号。下载按 GitHub Release 资产 SHA-256 校验，回退前检查旧版能否读取当前节点配置、支持已有域名证书/续期，然后备份；兼容检查失败或取消时不修改服务。回退后菜单会恢复所选版本的功能和样式。
 
 **菜单 24 一键诊断连接**检查 DNS、内部服务、上游出口、SS/TUIC 监听、证书/SNI、相关本机防火墙规则，并在 VPS 上使用真实临时客户端验证 SS 和 TUIC。证书验证保持开启，不改原节点、防火墙或 DNS，不显示账密。多节点按编号选一条，避免重复请求所有出口。回环成功只说明 VPS 内部链路正常，无法证明青岛到 VPS 的公网、云安全组或 MiSub 导入一定正常；出口查询耗时也不是 ping。
+
+**菜单 26 选择共享或独立 sing-box**。输入中转编号，例如 `20001,20002`，或输入 `all` 批量选择。选 **1 共享**时，每台 VPS 的共享节点共用一个 sing-box，仍分别使用原有公网端口、账密、证书和 SOCKS5 出口。选 **2 独立**时，每个选中的节点使用自己的 sing-box。两种模式可以混用，3proxy 继续按中转端口运行。升级保留现有模式。更改共享组配置时，组内连接可能短暂断开，原链接仍有效。回退到不支持共享的版本前，先把共享节点切回独立。
 
 ### 离线安装
 

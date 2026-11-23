@@ -192,6 +192,8 @@ def install(manager, item, app):
         folder = Path(temporary)
         folder.chmod(0o700)
         unpack(archive, folder, item['tag'])
+        if not (folder / 'scripts/shared_access.py').is_file() and any(row.get('shared') for row in manager.rows()):
+            raise UpdateError('所选旧版不支持共享入口。请先用菜单 26 将共享节点切换为独立。')
         certificate_settings = manager.root / 'domain-certificate.json'
         if certificate_settings.exists() and not (folder / 'scripts/certificates.py').is_file():
             raise UpdateError('所选旧版不支持现有域名证书和自动续期，已取消；请选择 v1.3.1 或更新版本。')

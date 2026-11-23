@@ -13,10 +13,12 @@ import access
 if os.geteuid() != 0 or os.environ.get('RELAY_DISPOSABLE_HOST') != 'YES':
     raise SystemExit('只允许在明确标记的可丢弃 root 测试主机运行。')
 os.umask(0o077)
-target, upstream = serve(Target), serve(Upstream)
+target, upstream, second = serve(Target), serve(Upstream), serve(Upstream)
 target.hits = []
 upstream.user, upstream.password = 'systemd-test', PASSWORD
 upstream.requests, upstream.exit_source = [], '127.0.0.2'
+second.user, second.password = 'systemd-other', PASSWORD
+second.requests, second.exit_source = [], '127.0.0.3'
 manager = m.Manager(ip_url='http://exit.invalid:' + str(target.server_address[1]))
 rows = []
 try:
@@ -130,9 +132,64 @@ try:
     for row in manager.rows():
         assert manager.verify(row)[0] == '127.0.0.2'
     print('PASS: installer/update failure restores old release, unit, binary and running relays', flush=True)
+
+    from shared_access import UNIT
+    other = dict(manager.row(dual['port']), port=manager.allocate(), upstream_user=second.user,
+                 upstream_port=second.server_address[1], client_user='systemd-other')
+    other['access'] = access.generate(manager.rows(), other['port'])
+    with manager.lock():
+        manager.apply({other['port']: other})
+    ports = (dual['port'], other['port'])
+    saved_links = access.configs([manager.row(port) for port in ports], '203.0.113.1')
+    selection = ','.join(map(str, ports))
+    switched = subprocess.run(['sb1'], input='26\n' + selection + '\n1\n8\n0\n',
+                              text=True, capture_output=True, check=True)
+    assert '已切换 2 个入口' in switched.stdout and switched.stdout.count('共享入口 运行中') == 2
+    assert subprocess.run(['systemctl', 'is-enabled', '--quiet', UNIT]).returncode == 0
+    for port in ports:
+        assert not manager.backend.call('is-active', '--quiet', f'socks-access@{port}.service', required=False)
+
+    def check_shared():
+        for port, exit_ip in zip(ports, ('127.0.0.2', '127.0.0.3')):
+            row = manager.row(port)
+            assert manager.backend.owns_listener(row['access']['port'], unit=UNIT, both=True)
+            for protocol in ('tcp', 'tuic'):
+                assert local_entrance(manager, row, protocol)[0] == exit_ip
+
+    check_shared()
+    assert access.configs([manager.row(port) for port in ports], '203.0.113.1') == saved_links
+    print('PASS: menu switches two endpoints to one sing-box with distinct authenticated upstreams and identical exports', flush=True)
+    subprocess.run(['bash', 'install.sh', '--local'], check=True)
+    check_shared()
+    print('PASS: repeated installation preserves shared listeners and both working exits', flush=True)
+
+    with manager.lock():
+        bad = dict(manager.row(other['port']), upstream_password='incorrect')
+        try:
+            manager.apply({bad['port']: bad})
+        except m.Error as exc:
+            assert '已自动回滚' in str(exc)
+        else:
+            raise AssertionError('bad shared upstream unexpectedly accepted')
+    check_shared()
+    print('PASS: a failed shared node edit restores both listeners and routes', flush=True)
+    switched = subprocess.run(['sb1'], input=f'26\n{dual["port"]}\n2\n0\n',
+                              text=True, capture_output=True, check=True)
+    assert '已切换 1 个入口' in switched.stdout
+    assert manager.backend.owns_listener(dual['access']['port'], unit=dual_unit, both=True)
+    assert manager.backend.owns_listener(other['access']['port'], unit=UNIT, both=True)
+    assert local_entrance(manager, manager.row(dual['port']), 'tuic')[0] == '127.0.0.2'
+    assert local_entrance(manager, manager.row(other['port']), 'tcp')[0] == '127.0.0.3'
+    with manager.lock():
+        manager.apply({other['port']: None})
+    assert not manager.backend.call('is-active', '--quiet', UNIT, required=False)
+    assert not manager.backend.call('is-enabled', '--quiet', UNIT, required=False)
+    assert not (manager.root / 'shared-access.json').exists()
+    assert manager.backend.owns_listener(dual['access']['port'], unit=dual_unit, both=True)
+    print('PASS: shared and independent modes coexist; deleting the last shared endpoint stops the shared service', flush=True)
 finally:
     with manager.lock():
         manager.apply({r['port']: None for r in manager.rows()})
-    for server in (target, upstream):
+    for server in (target, upstream, second):
         server.shutdown()
         server.server_close()

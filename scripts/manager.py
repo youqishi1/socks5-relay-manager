@@ -105,8 +105,10 @@ def host(value):
 def validate(row):
     fields = {'port', 'upstream_host', 'upstream_port', 'upstream_user', 'upstream_password',
               'client_user', 'client_password', 'sources', 'bind', 'enabled'}
-    if not isinstance(row, dict) or set(row) - fields - {'resolved_ip', 'access'} or fields - set(row):
+    if not isinstance(row, dict) or set(row) - fields - {'resolved_ip', 'access', 'shared'} or fields - set(row):
         raise Error('配置字段不完整或含有未知字段。')
+    if 'shared' in row and (row['shared'] is not True or not row.get('access')):
+        raise Error('只有加密入口可加入共享组。')
     for key, low, high in [('port', FIRST, LAST), ('upstream_port', 1, 65535)]:
         if type(row[key]) is not int or not low <= row[key] <= high:
             raise Error('端口范围无效。')
@@ -308,7 +310,8 @@ class Systemd:
         access_unit = 'socks-access@' + str(port) + '.service'
         has_access_unit = Path('/etc/systemd/system/socks-access@.service').exists()
         if has_access_unit:
-            self.call('stop', access_unit, required=False)
+            if not self.call('stop', access_unit, required=False) and self.call('is-active', '--quiet', access_unit, required=False):
+                raise Error('无法停止此端口原来的独立入口。')
         if row and row['enabled']:
             self.call('enable', self.unit(port))
             self.call('restart', self.unit(port))
@@ -319,7 +322,7 @@ class Systemd:
                 time.sleep(0.1)
             else:
                 raise Error('服务启动失败或端口未监听。')
-            if row.get('access'):
+            if row.get('access') and not row.get('shared'):
                 self.call('enable', access_unit)
                 self.call('restart', access_unit)
                 deadline = time.monotonic() + 8
@@ -335,6 +338,27 @@ class Systemd:
             self.call('disable', self.unit(port), required=False)
             if has_access_unit:
                 self.call('disable', access_unit, required=False)
+
+    def stop_shared(self):
+        from shared_access import UNIT
+        self.call('stop', UNIT)
+
+    def start_shared(self, ports):
+        from shared_access import UNIT
+        if not ports:
+            self.call('disable', UNIT)
+            return
+        self.call('enable', UNIT)
+        self.call('start', UNIT)
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            if self.call('is-active', '--quiet', UNIT, required=False) and all(
+                self.owns_listener(port, unit=UNIT, both=True, udp_only=udp_only)
+                for port, udp_only in ports
+            ):
+                return
+            time.sleep(0.1)
+        raise Error('共享入口未正常启动，或有公网端口未开始监听。')
 
     def active(self, port):
         return self.call('is-active', '--quiet', self.unit(port), required=False)
@@ -442,18 +466,90 @@ class Manager:
         if not journal.exists():
             return
         pending = read_json(journal)
+        shared_changed = pending.get('shared_changed', False)
         failures = []
+        if shared_changed:
+            try:
+                self.backend.stop_shared()
+            except (Error, OSError, subprocess.TimeoutExpired):
+                raise Error('无法停止共享入口以回滚；事务记录已保留。') from None
         for port in pending['ports']:
             try:
                 self.backend.apply(int(port), None)
-                pointer = pending['old'].get(str(port))
-                self.set_pointer(int(port), pointer)
-                self.backend.apply(int(port), self.row(port, pointer) if pointer else None)
             except Exception:
                 failures.append(str(port))
         if failures:
             raise Error('回滚尚未完成，受影响端口：' + ', '.join(failures) + '；事务记录已保留，请修复后再次运行菜单。')
+        for port in pending['ports']:
+            self.set_pointer(int(port), pending['old'].get(str(port)))
+        for port in pending['ports']:
+            pointer = pending['old'].get(str(port))
+            if pointer:
+                try:
+                    self.backend.apply(int(port), self.row(port, pointer))
+                except (Error, OSError, subprocess.TimeoutExpired):
+                    failures.append(str(port))
+        if failures:
+            raise Error('回滚时未能恢复端口 ' + ', '.join(failures) + '；事务记录已保留。')
+        if shared_changed:
+            try:
+                self.start_shared(self.prepare_shared(self.pointers()))
+            except (Error, OSError, subprocess.TimeoutExpired):
+                raise Error('回滚时未能恢复共享入口；事务记录已保留。') from None
         journal.unlink()
+
+    def shared_entries(self, pointers):
+        entries = []
+        for port, pointer in sorted(pointers.items(), key=lambda item: int(item[0])):
+            if pointer:
+                row = self.row(port, pointer)
+                if row.get('enabled') and row.get('shared'):
+                    entries.append((row, self.revision(port, pointer)))
+        return entries
+
+    def prepare_shared(self, pointers):
+        from access import AccessError
+        from entrance_profiles import profile
+        from shared_access import render_group
+        entries = self.shared_entries(pointers)
+        if not entries:
+            return None, []
+        try:
+            config = render_group(entries)
+        except AccessError as exc:
+            raise Error(str(exc)) from None
+        with tempfile.TemporaryDirectory(prefix='relay-check-') as folder:
+            candidate = Path(folder) / 'shared.json'
+            atomic(candidate, config)
+            try:
+                result = subprocess.run([str(self.access_binary), 'check', '-c', str(candidate)],
+                                        capture_output=True, timeout=15)
+            except (OSError, subprocess.TimeoutExpired):
+                raise Error('共享入口配置验证未完成。') from None
+            if result.returncode:
+                raise Error('共享入口配置验证失败。')
+        ports = [(row['access']['port'], profile(row['access']) != 'compat') for row, _ in entries]
+        return config, ports
+
+    def start_shared(self, prepared):
+        from shared_access import CONFIG
+        config, ports = prepared
+        path = self.root / CONFIG
+        if config is None:
+            path.unlink(missing_ok=True)
+        else:
+            atomic(path, config)
+        self.backend.start_shared(ports)
+
+    def restart_installed(self):
+        pointers = self.pointers()
+        shared = self.prepare_shared(pointers)
+        if shared[1]:
+            self.backend.stop_shared()
+        for port, pointer in pointers.items():
+            self.backend.apply(int(port), self.row(port, pointer))
+        if shared[1]:
+            self.start_shared(shared)
 
     def apply(self, changes, verify=True):
         """Prepare every revision first, journal, atomically switch per-port, rollback."""
@@ -489,15 +585,26 @@ class Manager:
                     log.touch(mode=0o600, exist_ok=True)
                     os.chmod(log, 0o600)
             prepared[str(port)] = pointer
-        pending = {'old': old, 'ports': list(prepared)}
+        future = {**old, **prepared}
+        shared_changed = any(
+            data.get(port) and self.row(port, data[port]).get('shared')
+            for data in (old, future) for port in prepared
+        )
+        shared = self.prepare_shared(future) if shared_changed else None
+        pending = {'old': old, 'ports': list(prepared), 'shared_changed': shared_changed}
         write_json(self.root / 'pending.json', pending)
         try:
+            if shared_changed:
+                self.backend.stop_shared()
             for port, pointer in prepared.items():
                 self.set_pointer(int(port), pointer)
+            for port, pointer in prepared.items():
                 row = self.row(port, pointer) if pointer else None
                 self.backend.apply(int(port), row)
                 if verify and row and row['enabled']:
                     self.verify(row)
+            if shared_changed:
+                self.start_shared(shared)
             (self.root / 'pending.json').unlink()
         except Exception as exc:
             try:
@@ -534,7 +641,7 @@ class Manager:
     def run_access(self, port):
         from access import render as render_access
         row = self.row(port)
-        if not row['enabled'] or not row.get('access'):
+        if not row['enabled'] or not row.get('access') or row.get('shared'):
             raise Error('双模式入口未启用。')
         directory = self.revision(port, read_json(self.pointer_path(port)))
         config = directory / 'access.json'
@@ -543,6 +650,18 @@ class Manager:
         if (directory / 'private-key.pem').read_text() != row['access']['private_key'] or (directory / 'certificate.pem').read_text() != row['access']['certificate']:
             raise Error('双模式证书与保存数据不一致，拒绝启动。')
         os.execv(str(self.access_binary), [str(self.access_binary), 'run', '-c', str(config)])
+
+    def run_shared(self):
+        from shared_access import CONFIG, render_group
+        entries = self.shared_entries(self.pointers())
+        path = self.root / CONFIG
+        if not entries or path.read_text(encoding='utf-8') != render_group(entries):
+            raise Error('共享入口配置与保存数据不一致，拒绝启动。')
+        for row, directory in entries:
+            for name, key in (('private-key.pem', 'private_key'), ('certificate.pem', 'certificate')):
+                if (directory / name).read_text() != row['access'][key]:
+                    raise Error('共享入口证书与保存数据不一致，拒绝启动。')
+        os.execv(str(self.access_binary), [str(self.access_binary), 'run', '-c', str(path)])
 
 
 def ask(prompt, default=None):
@@ -602,6 +721,8 @@ def pasted_row(manager, previous=None):
                sources=old.get('sources', ['127.0.0.1']), bind=old.get('bind', '127.0.0.1'), enabled=True)
     if old.get('access'):
         row['access'] = copy.deepcopy(old['access'])
+    if old.get('shared'):
+        row['shared'] = True
     validate(row)
     print('正在检测上游代理...')
     row['resolved_ip'] = resolve(row['upstream_host'])
@@ -637,6 +758,8 @@ def new_row(manager, previous=None, local_tuic=False):
     row['enabled'] = True
     if old.get('access'):
         row['access'] = copy.deepcopy(old['access'])
+    if old.get('shared'):
+        row['shared'] = True
     validate(row)
     if '*' in row['sources']:
         print('警告：SOCKS5 本身不加密，公网传输会暴露账号密码和流量。建议通过 WireGuard 访问，并限制来源 IP。')
@@ -884,6 +1007,8 @@ def select_row(manager):
 
 
 def show_rows(manager):
+    from shared_access import unit_for
+    from entrance_profiles import PROFILES, profile
     for i, row in enumerate(manager.rows(), 1):
         print(str(i) + '. 端口 ' + str(row['port']) + ' | 上游 ' + row['upstream_host'] + ':' + str(row['upstream_port'])
               + ' | 客户端 ' + row['client_user'] + ' | ' + ('启用' if row['enabled'] else '停用')
@@ -891,11 +1016,12 @@ def show_rows(manager):
               + ' | 监听 ' + ('是' if listening(row['port'], row['bind']) else '否'))
         if row.get('access'):
             front = row['access']['port']
-            active = manager.backend.call('is-active', '--quiet', 'socks-access@' + str(row['port']) + '.service', required=False)
-            from entrance_profiles import PROFILES, profile
+            unit = unit_for(row)
+            active = row['enabled'] and manager.backend.call('is-active', '--quiet', unit, required=False)
             chosen = profile(row['access'])
-            owns = manager.backend.owns_listener(front, unit='socks-access@' + str(row['port']) + '.service', both=True, udp_only=chosen != 'compat')
-            print('   ' + PROFILES[chosen] + ' 公网端口 ' + str(front) + ' | 入口服务 ' + ('运行中' if active else '未运行') + ' | ' + ('TCP/UDP' if chosen == 'compat' else 'UDP') + ' 监听 ' + ('是' if owns else '否'))
+            owns = active and manager.backend.owns_listener(front, unit=unit, both=True, udp_only=chosen != 'compat')
+            topology = '共享' if row.get('shared') else '独立'
+            print('   ' + PROFILES[chosen] + ' 公网端口 ' + str(front) + ' | ' + topology + '入口 ' + ('运行中' if active else '未运行') + ' | ' + ('TCP/UDP' if chosen == 'compat' else 'UDP') + ' 监听 ' + ('是' if owns else '否'))
             print('   TUIC 证书：' + ('公共 CA | 域名 ' + row['access']['server_name'] if row['access'].get('certificate_trust') == 'system' else '自签 | MiSub 分发请配置菜单 22'))
         else:
             print('   允许来源：' + ','.join(row['sources']) + ' | 绑定地址：' + row['bind'])
@@ -914,12 +1040,49 @@ def test_row(manager, row):
         print('端口 ' + str(row['port']) + ' | 连接失败 | ' + str(exc))
 
 
+def configure_topology(manager):
+    rows = {str(row['port']): row for row in manager.rows() if row.get('access')}
+    if not rows:
+        raise Error('暂无可调整的加密入口。')
+    for port, row in rows.items():
+        print(port + ' | ' + ('共享' if row.get('shared') else '独立'))
+    selection = ask('输入中转编号（如 20001,20002），输入 all 选择全部，0 返回')
+    if selection == '0':
+        return
+    ports = rows if selection.lower() == 'all' else dict.fromkeys(re.split(r'\s*[,，]\s*', selection))
+    if ports.keys() - rows.keys():
+        raise Error('包含不存在或未配置加密入口的编号。')
+    mode = ask('选择 1 共享或 2 独立，0 返回')
+    if mode == '0':
+        return
+    if mode not in ('1', '2'):
+        raise Error('请选择 1 或 2。')
+    changes = {}
+    for port in ports:
+        row = rows[port].copy()
+        if mode == '1' and not row.get('shared'):
+            row['shared'] = True
+            changes[row['port']] = row
+        elif mode == '2' and row.pop('shared', False):
+            changes[row['port']] = row
+    if not changes:
+        print('所选入口已使用该模式。')
+        return
+    print('切换期间，所选入口及共享组中的现有连接可能短暂断开。')
+    manager.apply(changes, verify=False)
+    print('已切换 ' + str(len(changes)) + ' 个入口。原有链接可继续使用，无需重新导入。')
+
+
 def uninstall(manager):
+    from shared_access import UNIT
     print('卸载仅删除本项目程序、服务和命令；默认保留 root 可读配置、凭据、备份和日志。')
     if ask('请输入 UNINSTALL 确认卸载') != 'UNINSTALL':
         raise Error('已取消。')
     with manager.lock():
         manager.backup()
+        if Path('/etc/systemd/system', UNIT).exists():
+            manager.backend.stop_shared()
+            manager.start_shared((None, []))
         for row in manager.rows():
             manager.backend.apply(row['port'], None)
     subprocess.run(['systemctl', 'stop', 'socks-relay-cert.timer'], capture_output=True)
@@ -929,6 +1092,7 @@ def uninstall(manager):
     if shortcut.is_symlink() and os.readlink(shortcut) == '/usr/local/bin/socks-menu':
         shortcut.unlink()
     for path in (Path('/etc/systemd/system/socks-relay@.service'), Path('/etc/systemd/system/socks-access@.service'),
+                 Path('/etc/systemd/system', UNIT),
                  Path('/etc/systemd/system/socks-relay-cert.service'), Path('/etc/systemd/system/socks-relay-cert.timer'), Path('/etc/logrotate.d/socks5-relay-manager'),
                  Path('/usr/local/bin/socks-menu'), Path('/usr/local/bin/socks-relay-uninstall')):
         path.unlink(missing_ok=True)
@@ -950,7 +1114,7 @@ def menu(manager):
             state = '运行中' if enabled and running == len(enabled) else ('部分运行/异常' if running else '未运行/暂无启用代理')
             print('\n========================================\n        SOCKS5 中转管理系统\n========================================')
             print('系统状态：' + state + '\n代理数量：' + str(len(rows)) + '\n端口范围：20001-29999')
-            print('1. 一键添加加密 TCP + TUIC（粘贴整条 SOCKS5）\n2. 查看全部中转\n3. 删除 SOCKS5 中转\n4. 修改 SOCKS5 中转\n5. 检测所有代理出口 IP\n6. 检测指定代理\n7. 重启代理服务\n8. 查看运行状态\n9. 查看日志\n10. 备份配置\n11. 恢复配置\n12. 更新程序\n13. 卸载程序\n14. 高级：复用现有 TUIC 导出配置\n15. 高级：手动添加本机中转\n16. 查看全部连接信息和账密\n17. 高级：粘贴整条信息添加本机中转\n18. 重新导出双模式客户端文件\n19. 给已有中转启用加密 TCP + TUIC\n20. 设置 VPS 公网 IP/域名\n21. 高级：添加原生 SOCKS5 中转\n22. 配置域名证书（MiSub / 小火箭 / v2rayN 分发）\n23. 显示 TUIC 手机扫码二维码\n24. 一键诊断连接（已启用入口 / 上游 / 证书）\n25. 调整公网入口（关闭 SS / TUIC / Hysteria 2）\n0. 退出')
+            print('1. 一键添加加密 TCP + TUIC（粘贴整条 SOCKS5）\n2. 查看全部中转\n3. 删除 SOCKS5 中转\n4. 修改 SOCKS5 中转\n5. 检测所有代理出口 IP\n6. 检测指定代理\n7. 重启代理服务\n8. 查看运行状态\n9. 查看日志\n10. 备份配置\n11. 恢复配置\n12. 更新程序\n13. 卸载程序\n14. 高级：复用现有 TUIC 导出配置\n15. 高级：手动添加本机中转\n16. 查看全部连接信息和账密\n17. 高级：粘贴整条信息添加本机中转\n18. 重新导出双模式客户端文件\n19. 给已有中转启用加密 TCP + TUIC\n20. 设置 VPS 公网 IP/域名\n21. 高级：添加原生 SOCKS5 中转\n22. 配置域名证书（MiSub / 小火箭 / v2rayN 分发）\n23. 显示 TUIC 手机扫码二维码\n24. 一键诊断连接（已启用入口 / 上游 / 证书）\n25. 调整公网入口（关闭 SS / TUIC / Hysteria 2）\n26. 按端口选择共享或独立 sing-box\n0. 退出')
             option = ask('请输入选项')
             if option == '0':
                 return
@@ -1036,7 +1200,7 @@ def menu(manager):
                     print('删除端口 ' + str(row['port']) + '，上游 ' + row['upstream_host'] + ':' + str(row['upstream_port']))
                     if confirm('确认删除？'):
                         manager.apply({row['port']: None})
-                        print('已删除，其他端口继续运行。')
+                        print('已删除。')
                 elif option == '5':
                     for row in manager.rows():
                         test_row(manager, row)
@@ -1050,6 +1214,8 @@ def menu(manager):
                 elif option == '9':
                     from collections import deque
                     row = select_row(manager)
+                    if row.get('shared'):
+                        print('共享入口日志（root 可读）：' + str(manager.log / 'access-shared.log'))
                     for path in (manager.log / (kind + '-' + str(row['port']) + '.log') for kind in ('relay', 'service', 'access')):
                         if path.exists():
                             with path.open(encoding='utf-8', errors='replace') as stream:
@@ -1073,8 +1239,10 @@ def menu(manager):
                     if confirm('恢复会替换当前中转配置，确认？'):
                         manager.restore(backups[index - 1])
                         print('恢复完成，启用端口的出口已验证。')
+                elif option == '26':
+                    configure_topology(manager)
                 else:
-                    print('无效选项，请输入 0–25。')
+                    print('无效选项，请输入 0–26。')
         except Error as exc:
             print('错误：' + str(exc))
             if (manager.root / 'pending.json').exists():
@@ -1090,14 +1258,19 @@ def main():
         raise Error('管理操作需要 root 权限，请使用 sudo sb1。')
     os.umask(0o077)
     args = sys.argv[1:]
+    log_name = None
     if len(args) == 2 and args[0] in ('run', 'access-run') and args[1].isdecimal() and FIRST <= int(args[1]) <= LAST:
         kind = 'service' if args[0] == 'run' else 'access'
-        fd = os.open(LOG / (kind + '-' + str(int(args[1])) + '.log'),
+        log_name = kind + '-' + str(int(args[1])) + '.log'
+    elif args == ['shared-access-run']:
+        log_name = 'access-shared.log'
+    if log_name:
+        fd = os.open(LOG / log_name,
                      os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         os.dup2(fd, 2)
         os.close(fd)
     # systemd's read-only /etc sandbox must never be chmod'ed by the launcher.
-    manager = Manager(readonly=args[:1] in (['run'], ['access-run']))
+    manager = Manager(readonly=bool(log_name))
     if args == ['menu']:
         menu(manager)
     elif args == ['uninstall']:
@@ -1106,6 +1279,8 @@ def main():
         manager.run(int(args[1]))
     elif len(args) == 2 and args[0] == 'access-run' and args[1].isdecimal() and FIRST <= int(args[1]) <= LAST:
         manager.run_access(int(args[1]))
+    elif args == ['shared-access-run']:
+        manager.run_shared()
     elif args == ['check']:
         with manager.lock():
             for row in manager.rows():
@@ -1113,8 +1288,7 @@ def main():
                     check_config(row, manager.binary)
     elif args == ['restart-installed']:
         with manager.lock():
-            for row in manager.rows():
-                manager.backend.apply(row['port'], row)
+            manager.restart_installed()
     elif args == ['status']:
         with manager.lock():
             show_rows(manager)
