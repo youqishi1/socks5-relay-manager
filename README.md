@@ -16,7 +16,7 @@ TCP 使用 Shadowsocks 2022，TUIC 使用 QUIC/TLS。两种入口共用公网端
 以 root 登录，普通用户先 `sudo -i`，再复制一整行：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.5.2/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.5.3/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
 ```
 
 固定版本安装包先校验 SHA-256，再执行安装。交互终端安装后自动打开菜单，以后 root 输入 `sb1`，普通用户输入 `sudo sb1`。原命令 `socks-menu` 继续可用。若 `/usr/local/bin/sb1` 已被其他程序占用，安装器拒绝覆盖。没有 curl 时先安装 `curl ca-certificates`。下载源码后在源码目录执行 `bash install.sh --local`。
@@ -45,7 +45,7 @@ Debian 11 使用项目专用官方归档源，文件仅保存在项目 `apt-comp
 
 ## 只填写一整条 SOCKS5
 
-菜单 **1** 粘贴以下任一格式，输入隐藏，粘贴后回车即可：
+菜单 **1** 先选择运行方式。直接回车或选 **1** 加入共享 sing-box，选 **2** 为此节点启动独立 sing-box，选 **0** 返回。然后粘贴以下任一格式，输入隐藏：
 
 ```text
 IP:端口:账号:密码
@@ -55,7 +55,7 @@ socks5://账号:密码@IP:端口
 
 冒号格式按前 3 个冒号拆分，密码中的冒号保留；账号含冒号/@ 时用 URL 格式和 URL 编码。支持可打印特殊字符及 UTF-8 密码，拒绝换行、控制字符及 3proxy 保留用户名 `*`。
 
-程序检测上游，自动分配端口、生成凭据/证书、启动两种入口并生成私有客户端文件。菜单 **16** 一次查看全部中转的连接信息、SS 密钥、TUIC UUID/密码及本机账密，无需逐个输入端口；**18** 重新导出；**19** 给旧中转启用双模式，此时旧原生端口改为本机入口，电脑使用新加密公网端口。
+程序检测上游，自动分配端口、生成凭据/证书、启动两种入口并生成私有客户端文件。菜单 **16** 一次查看全部中转的连接信息、运行方式和账密；**18** 重新导出；**19** 给旧中转启用双模式，同样可选择共享或独立，此时原生端口改为本机入口，电脑使用新加密公网端口。
 
 旧版默认仅允许本机来源，电脑直接连接原生 SOCKS5 可能因此被拒绝。新版状态显示来源和绑定地址。公网地址优先从网卡发现，NAT 时通过不含凭据的 HTTPS 查询获取并保存；失败时菜单 **20** 设置公网 IP/域名。NAT 的端口映射仍需主机商提供。
 

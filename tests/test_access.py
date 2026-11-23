@@ -172,12 +172,12 @@ class DualChains(unittest.TestCase):
             front[field] = value
             with self.assertRaises(a.AccessError): a.validate(front)
 
-    def test_menu_default_single_paste_and_credential_view(self):
+    def test_menu_independent_single_paste_and_credential_view(self):
         from urllib.parse import quote
         upstream = self.fixture.upstream(4)
         port = self.manager.allocate()
         line = 'socks5://' + quote(upstream.user, safe='') + ':' + quote(upstream.password, safe='') + '@127.0.0.1:' + str(upstream.server_address[1])
-        answers = iter(['1', '16', '0'])
+        answers = iter(['1', '2', '16', '0'])
         output = io.StringIO()
         with patch.object(self.manager, 'lock', side_effect=contextlib.nullcontext), \
              patch.object(m.getpass, 'getpass', return_value=line) as paste, \
@@ -187,10 +187,12 @@ class DualChains(unittest.TestCase):
             m.menu(self.manager)
         self.assertEqual(paste.call_count, 1)
         row = self.manager.row(port)
+        self.assertFalse(row.get('shared', False))
         self.assertEqual(self.manager.verify(row)[0], '127.0.0.4')
         self.assertEqual(row['bind'], '127.0.0.1')
         self.assertIn(row['access']['tuic_password'], output.getvalue())
         self.assertIn('ss://', output.getvalue())
+        self.assertIn('运行方式：独立', output.getvalue())
         for saved in self.manager.rows():
             self.assertIn(saved['client_password'], output.getvalue())
             self.assertIn(saved['access']['ss_password'], output.getvalue())

@@ -178,14 +178,14 @@ EOF
         relay_apt install -y --no-install-recommends curl ca-certificates
     fi
 fi
-echo '正在下载固定版本 v1.5.2 安装包...'
-relay_download 'https://github.com/youqishi1/socks5-relay-manager/releases/download/v1.5.2/socks5-relay-manager-v1.5.2-install.tar.gz' \
-    '47cf8f0e2a36056a35ebc4e29defe4ad19be37f12a3262a6e8eb742b9747bfb1' "$work/install.tar.gz"
+echo '正在下载固定版本 v1.5.3 安装包...'
+relay_download 'https://github.com/youqishi1/socks5-relay-manager/releases/download/v1.5.3/socks5-relay-manager-v1.5.3-install.tar.gz' \
+    '9b0bd5d19d465cc752c3e92069b7d4cba1b7d8490a981534ebe47c4c19757dd7' "$work/install.tar.gz"
 mkdir "$work/source"
 tar -xzf "$work/install.tar.gz" -C "$work/source"
 bash "$work/source/install.sh" --local
 if [[ -t 0 ]]; then
     sb1
 else
-    echo '安装完成。执行 sb1 打开菜单，选 1 粘贴 SOCKS5 自动部署 TCP + TUIC；更新选 12，诊断选 24。'
+    echo '安装完成。执行 sb1，选 1 选择共享或独立，再粘贴 SOCKS5；更新选 12，诊断选 24。'
 fi

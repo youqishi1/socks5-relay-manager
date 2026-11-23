@@ -1,9 +1,13 @@
 """Actual installer, systemd startup, repeat install, rollback and persistence."""
 import copy
+import contextlib
+import io
 import os
 from pathlib import Path
 import subprocess
 import sys
+from unittest.mock import patch
+from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).parent))
 from test_relay import m, serve, Target, Upstream, PASSWORD
@@ -134,17 +138,32 @@ try:
     print('PASS: installer/update failure restores old release, unit, binary and running relays', flush=True)
 
     from shared_access import UNIT
-    other = dict(manager.row(dual['port']), port=manager.allocate(), upstream_user=second.user,
-                 upstream_port=second.server_address[1], client_user='systemd-other')
-    other['access'] = access.generate(manager.rows(), other['port'])
-    with manager.lock():
-        manager.apply({other['port']: other})
+    other_port = manager.allocate()
+    line = 'socks5://' + quote(second.user, safe='') + ':' + quote(second.password, safe='') + '@127.0.0.1:' + str(second.server_address[1])
+    display = io.StringIO()
+    independent_pid = subprocess.check_output(['systemctl', 'show', dual_unit, '--property=MainPID'])
+    with patch.object(m, 'public_address', return_value='203.0.113.1'), contextlib.redirect_stdout(display):
+        with patch('builtins.input', side_effect=['1', '0', '0']), patch.object(m.getpass, 'getpass') as paste:
+            m.menu(manager)
+            paste.assert_not_called()
+        assert str(other_port) not in manager.pointers()
+        with patch('builtins.input', side_effect=['1', 'invalid', '', '19', str(dual['port']), '0']), \
+             patch.object(m.getpass, 'getpass', return_value=line) as paste:
+            m.menu(manager)
+            paste.assert_called_once()
+    other = manager.row(other_port)
+    assert other['shared'] is True
+    assert '请输入 1、2 或 0' in display.getvalue() and '运行方式：共享' in display.getvalue()
+    assert '此节点已启用加密入口' in display.getvalue()
+    assert subprocess.check_output(['systemctl', 'show', dual_unit, '--property=MainPID']) == independent_pid
+    assert manager.backend.owns_listener(other['access']['port'], unit=UNIT, both=True)
+    print('PASS: menu 1 cancels before requesting credentials, retries invalid mode, and defaults to shared; menu 19 preserves an active core', flush=True)
     ports = (dual['port'], other['port'])
     saved_links = access.configs([manager.row(port) for port in ports], '203.0.113.1')
     selection = ','.join(map(str, ports))
     switched = subprocess.run(['sb1'], input='26\n' + selection + '\n1\n8\n0\n',
                               text=True, capture_output=True, check=True)
-    assert '已切换 2 个入口' in switched.stdout and switched.stdout.count('共享入口 运行中') == 2
+    assert '已切换 1 个入口' in switched.stdout and switched.stdout.count('共享入口 运行中') == 2
     assert subprocess.run(['systemctl', 'is-enabled', '--quiet', UNIT]).returncode == 0
     for port in ports:
         assert not manager.backend.call('is-active', '--quiet', f'socks-access@{port}.service', required=False)

@@ -866,20 +866,38 @@ def export_dual(manager):
     return directory
 
 
-def enable_dual(manager, row):
+def enable_dual(manager, row=None):
     from access import AccessError, generate
     if not manager.access_binary.is_file():
         raise Error('双模式核心尚未安装，请先运行新版一键安装命令。')
+    if row and row.get('access') and row['enabled']:
+        print('此节点已启用加密入口。可在菜单 26 更改运行方式。')
+        export_dual(manager)
+        show_connection(row, manager)
+        return
+    mode = None
+    if row is None or not row.get('access'):
+        if any(existing['enabled'] and existing.get('shared') for existing in manager.rows()):
+            print('选择共享会重启现有共享入口，组内连接可能短暂断开。')
+        mode = choose_topology(default='1')
+        if mode == '0':
+            return
+        if row is None:
+            row = pasted_row(manager)
     row = copy.deepcopy(row)
     row['bind'], row['sources'] = '127.0.0.1', ['127.0.0.1']
     row['enabled'] = True
-    if not row.get('access'):
+    if mode is not None:
         try:
             row['access'] = generate(manager.rows(), row['port'])
             from certificates import for_new
             row['access'] = for_new(manager, row['access'])
         except AccessError as exc:
             raise Error(str(exc)) from None
+        if mode == '1':
+            row['shared'] = True
+    elif row.get('shared'):
+        print('重新启用会重启共享入口，组内连接可能短暂断开。')
     manager.apply({row['port']: row})
     export_dual(manager)
     show_connection(row, manager)
@@ -894,7 +912,8 @@ def show_connection(row, manager=None):
         front = row['access']
         from entrance_profiles import PROFILES, profile
         print('\n加密入口：' + address + ':' + str(front['port']) + '（' + PROFILES[profile(front)] + '）')
-        print('内部中转编号：' + str(row['port']) + '；状态：' + ('启用' if row['enabled'] else '停用'))
+        print('内部中转编号：' + str(row['port']) + '；状态：' + ('启用' if row['enabled'] else '停用')
+              + '；运行方式：' + ('共享' if row.get('shared') else '独立'))
         print('本机账号：' + row['client_user'] + '；本机密码：' + row['client_password'])
         if profile(front) == 'compat':
             print('SS 方法：' + METHOD + '\nSS 密钥：' + front['ss_password'])
@@ -1040,6 +1059,15 @@ def test_row(manager, row):
         print('端口 ' + str(row['port']) + ' | 连接失败 | ' + str(exc))
 
 
+def choose_topology(default=None):
+    print('1. 共享 sing-box（节省内存）\n2. 独立 sing-box（可单独重启）\n0. 返回')
+    while True:
+        mode = ask('选择运行方式' + ('（回车选共享）' if default == '1' else ''), default)
+        if mode in ('0', '1', '2'):
+            return mode
+        print('请输入 1、2 或 0。')
+
+
 def configure_topology(manager):
     rows = {str(row['port']): row for row in manager.rows() if row.get('access')}
     if not rows:
@@ -1052,11 +1080,9 @@ def configure_topology(manager):
     ports = rows if selection.lower() == 'all' else dict.fromkeys(re.split(r'\s*[,，]\s*', selection))
     if ports.keys() - rows.keys():
         raise Error('包含不存在或未配置加密入口的编号。')
-    mode = ask('选择 1 共享或 2 独立，0 返回')
+    mode = choose_topology()
     if mode == '0':
         return
-    if mode not in ('1', '2'):
-        raise Error('请选择 1 或 2。')
     changes = {}
     for port in ports:
         row = rows[port].copy()
@@ -1104,7 +1130,7 @@ def uninstall(manager):
 
 
 def menu(manager):
-    print('推荐：选 1，粘贴整条 SOCKS5，自动部署加密 TCP + TUIC。选 16 随时查看账号密码，选 18 导出客户端文件。')
+    print('推荐：选 1，选择共享或独立，再粘贴整条 SOCKS5。选 16 查看连接信息，选 18 导出客户端文件。')
     while True:
         try:
             with manager.lock():
@@ -1146,10 +1172,12 @@ def menu(manager):
                 continue
             with manager.lock():
                 if option == '1':
-                    enable_dual(manager, pasted_row(manager))
+                    enable_dual(manager)
                 elif option in ('4', '15', '21'):
                     previous = select_row(manager) if option == '4' else None
                     row = pasted_row(manager, previous) if previous else new_row(manager, local_tuic=option == '15')
+                    if row.get('shared'):
+                        print('保存后会重启共享入口，组内连接可能短暂断开。')
                     manager.apply({row['port']: row})
                     if row.get('access'):
                         export_dual(manager)
@@ -1179,6 +1207,8 @@ def menu(manager):
                     from entrance_profiles import configure, PROFILES, profile
                     from access import AccessError
                     row = select_row(manager)
+                    if row.get('shared') and row['enabled']:
+                        print('更改协议会重启共享入口，组内连接可能短暂断开。')
                     print('1. 仅 TUIC（关闭 SS TCP 监听）\n2. 仅 Hysteria 2（HTTP/3，需要公共 CA 域名证书）\n3. SS + TUIC（原兼容模式）\n0. 返回')
                     choice = ask('选择入口模式')
                     if choice == '0':
@@ -1198,6 +1228,8 @@ def menu(manager):
                 elif option == '3':
                     row = select_row(manager)
                     print('删除端口 ' + str(row['port']) + '，上游 ' + row['upstream_host'] + ':' + str(row['upstream_port']))
+                    if row.get('shared') and row['enabled']:
+                        print('删除会重启共享入口，组内连接可能短暂断开。')
                     if confirm('确认删除？'):
                         manager.apply({row['port']: None})
                         print('已删除。')
@@ -1208,9 +1240,11 @@ def menu(manager):
                     test_row(manager, select_row(manager))
                 elif option == '7':
                     row = select_row(manager)
+                    if row.get('shared') and not confirm('同组入口将一起重启，连接可能短暂断开。继续？'):
+                        continue
                     row['enabled'] = True
                     manager.apply({row['port']: row})
-                    print('指定端口重启成功，出口已验证。')
+                    print(('共享入口重启成功' if row.get('shared') else '指定端口重启成功') + '，所选节点的出口已验证。')
                 elif option == '9':
                     from collections import deque
                     row = select_row(manager)

@@ -52,5 +52,5 @@ bash "$work/source/install.sh" --local
 if [[ -t 0 ]]; then
     sb1
 else
-    echo '安装完成。执行 sb1 打开菜单，选 1 粘贴 SOCKS5 自动部署 TCP + TUIC；更新选 12，诊断选 24。'
+    echo '安装完成。执行 sb1，选 1 选择共享或独立，再粘贴 SOCKS5；更新选 12，诊断选 24。'
 fi

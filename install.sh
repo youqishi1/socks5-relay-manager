@@ -428,7 +428,7 @@ if [[ ! -L /usr/local/bin/sb1 ]]; then
     ln -s /usr/local/bin/socks-menu /usr/local/bin/sb1
 fi
 completed=1
-echo '安装成功！执行 sb1 打开菜单，选 1 粘贴完整 SOCKS5 自动生成加密 TCP + TUIC；选 16 随时查看凭据。'
+echo '安装成功！执行 sb1，选 1 选择共享或独立，再粘贴完整 SOCKS5；选 16 查看连接信息。'
 echo '已有旧版中转：选 19 启用双模式；选 18 导出 Clash Verge/v2rayN 客户端文件。'
 echo '需要通过 MiSub 分发给小火箭/v2rayN：选 22 配置域名证书，普通 TUIC 链接即可使用系统证书验证。'
 echo '未修改 SSH、防火墙、云安全组或已有 TUIC 服务。'
