@@ -1007,14 +1007,14 @@ def select_row(manager):
 
 
 def show_rows(manager):
-    from shared_access import unit_for
-    from entrance_profiles import PROFILES, profile
     for i, row in enumerate(manager.rows(), 1):
         print(str(i) + '. 端口 ' + str(row['port']) + ' | 上游 ' + row['upstream_host'] + ':' + str(row['upstream_port'])
               + ' | 客户端 ' + row['client_user'] + ' | ' + ('启用' if row['enabled'] else '停用')
               + ' | 服务 ' + ('运行中' if manager.backend.active(row['port']) else '未运行')
               + ' | 监听 ' + ('是' if listening(row['port'], row['bind']) else '否'))
         if row.get('access'):
+            from entrance_profiles import PROFILES, profile
+            from shared_access import unit_for
             front = row['access']['port']
             unit = unit_for(row)
             active = row['enabled'] and manager.backend.call('is-active', '--quiet', unit, required=False)
