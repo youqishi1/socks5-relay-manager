@@ -200,6 +200,12 @@ try:
     assert local_entrance(manager, manager.row(dual['port']), 'tuic')[0] == '127.0.0.2'
     assert local_entrance(manager, manager.row(other['port']), 'tcp')[0] == '127.0.0.3'
     with manager.lock():
+        for _ in range(6):
+            manager.backend.stop_shared()
+            manager.backend.start_shared([(other['access']['port'], False)])
+    assert local_entrance(manager, manager.row(other['port']), 'tuic')[0] == '127.0.0.3'
+    print('PASS: consecutive validated shared starts do not trip the systemd crash-loop limit', flush=True)
+    with manager.lock():
         manager.apply({other['port']: None})
     assert not manager.backend.call('is-active', '--quiet', UNIT, required=False)
     assert not manager.backend.call('is-enabled', '--quiet', UNIT, required=False)

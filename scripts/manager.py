@@ -349,6 +349,9 @@ class Systemd:
             self.call('disable', UNIT)
             return
         self.call('enable', UNIT)
+        # Each validated configuration change is an explicit start. Clear the
+        # previous start counter while keeping systemd's crash-loop limit.
+        self.call('reset-failed', UNIT, required=False)
         self.call('start', UNIT)
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
