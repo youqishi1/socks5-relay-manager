@@ -306,6 +306,12 @@ class Systemd:
             raise Error('systemd 操作失败；请查看运行状态或受保护的日志。')
         return result.returncode == 0
 
+    def start(self, unit, action='start'):
+        # A validated management action can start a unit even after frequent
+        # edits or a failed revision. Automatic restarts still use systemd's limit.
+        self.call('reset-failed', unit, required=False)
+        self.call(action, unit)
+
     def apply(self, port, row):
         access_unit = 'socks-access@' + str(port) + '.service'
         has_access_unit = Path('/etc/systemd/system/socks-access@.service').exists()
@@ -314,7 +320,7 @@ class Systemd:
                 raise Error('无法停止此端口原来的独立入口。')
         if row and row['enabled']:
             self.call('enable', self.unit(port))
-            self.call('restart', self.unit(port))
+            self.start(self.unit(port), 'restart')
             deadline = time.monotonic() + 7
             while time.monotonic() < deadline:
                 if self.active(port) and self.owns_listener(port):
@@ -324,7 +330,7 @@ class Systemd:
                 raise Error('服务启动失败或端口未监听。')
             if row.get('access') and not row.get('shared'):
                 self.call('enable', access_unit)
-                self.call('restart', access_unit)
+                self.start(access_unit, 'restart')
                 deadline = time.monotonic() + 8
                 while time.monotonic() < deadline:
                     if self.call('is-active', '--quiet', access_unit, required=False) and self.owns_listener(row['access']['port'], unit=access_unit, both=True, udp_only=row['access'].get('profile', 'compat') != 'compat'):
@@ -349,10 +355,7 @@ class Systemd:
             self.call('disable', UNIT)
             return
         self.call('enable', UNIT)
-        # Each validated configuration change is an explicit start. Clear the
-        # previous start counter while keeping systemd's crash-loop limit.
-        self.call('reset-failed', UNIT, required=False)
-        self.call('start', UNIT)
+        self.start(UNIT)
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
             if self.call('is-active', '--quiet', UNIT, required=False) and all(
