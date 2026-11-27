@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 import re
 import secrets
+import threading
 import time
 from urllib.parse import parse_qs, quote, urlsplit
 
@@ -50,44 +51,67 @@ def safe_destination(value):
 
 
 class AdminServer(HTTPServer):
-    def __init__(self, manager, port=PORT):
+    def __init__(self, manager, port=PORT, domain='', listener=None):
         self.manager = manager
         self.credentials = manager.root / PASSWORD_FILE
         self.password_version = None
         self.session = self.csrf = ''
-        self.failures = 0
-        self.blocked_until = self.failed_at = 0
+        self.failed_logins = {}
+        self.next_login = 0
+        self.auth_lock = threading.RLock()
         self.last_used = time.monotonic()
-        super().__init__(('127.0.0.1', port), AdminHandler)
+        self.domain, self.port = domain, port
+        self.scheme = 'https' if domain else 'http'
+        super().__init__(('127.0.0.1', port), AdminHandler, bind_and_activate=listener is None)
+        if listener is not None:
+            self.socket.close()
+            self.socket = listener
+            self.server_address = listener.getsockname()
+
+    def origin(self, host):
+        if self.domain:
+            authority = self.domain + (':' + str(self.port) if self.port != 443 else '')
+            if host != authority and (self.port != 443 or host != authority + ':443'):
+                raise Error('请使用 VPS 菜单显示的 HTTPS 域名链接。')
+            return 'https://' + authority
+        elif not HOST.fullmatch(host):
+            raise Error('请使用 SSH 隧道显示的本机链接。')
+        return self.scheme + '://' + host
 
     def refresh_password_version(self):
         stat = self.credentials.stat()
         version = (stat.st_ino, stat.st_mtime_ns)
         if version != self.password_version:
             self.session = self.csrf = ''
-            self.failures = self.blocked_until = self.failed_at = 0
+            self.failed_logins.clear()
+            self.next_login = 0
             self.password_version = version
 
-    def recent_lockout(self):
-        return max(0, int(self.blocked_until - time.monotonic() + .999))
-
-    def login(self, password):
-        now = time.monotonic()
-        if now - self.failed_at >= LOCKOUT:
-            self.failures = 0
-        record = read_json(self.credentials)
-        salt, digest = bytes.fromhex(record['salt']), bytes.fromhex(record['digest'])
-        if 0 < len(password.encode('utf-8')) <= 256 and compare_digest(password_digest(password, salt), digest):
-            self.session, self.csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-            self.last_used = now
-            self.failures = 0
-            return True
-        self.failed_at = now
-        self.failures += 1
-        if self.failures >= ATTEMPTS:
-            self.blocked_until = now + LOCKOUT
-            self.failures = 0
-        return False
+    def login(self, client, password):
+        with self.auth_lock:
+            self.refresh_password_version()
+            now = time.monotonic()
+            for address, (_, expiry) in list(self.failed_logins.items()):
+                if expiry <= now:
+                    del self.failed_logins[address]
+            count, expiry = self.failed_logins.get(client, (0, 0))
+            if count >= ATTEMPTS:
+                return '', max(1, int(expiry - now + .999))
+            if now < self.next_login or (count == 0 and len(self.failed_logins) >= 256):
+                return '', 1
+            # Public requests cannot repeatedly invoke the password KDF in parallel,
+            # even if a caller rotates their source IP.
+            if self.domain:
+                self.next_login = now + 1
+            record = read_json(self.credentials)
+            salt, digest = bytes.fromhex(record['salt']), bytes.fromhex(record['digest'])
+            if 0 < len(password.encode('utf-8')) <= 256 and compare_digest(password_digest(password, salt), digest):
+                self.session, self.csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+                self.last_used = now
+                self.failed_logins.pop(client, None)
+                return self.session, 0
+            self.failed_logins[client] = (count + 1, now + LOCKOUT)
+            return '', LOCKOUT if count + 1 >= ATTEMPTS else 0
 
 
 class AdminHandler(BaseHTTPRequestHandler):
@@ -95,6 +119,7 @@ class AdminHandler(BaseHTTPRequestHandler):
     sys_version = ''
 
     def setup(self):
+        self.csrf = self.session = ''
         self.request.settimeout(5)
         super().setup()
 
@@ -123,29 +148,34 @@ class AdminHandler(BaseHTTPRequestHandler):
         self.response(303, headers=(('Location', path), *headers))
 
     def error(self, status, message, authenticated=False):
-        self.response(status, views.notice(status, message, self.server.csrf if authenticated else ''))
+        self.response(status, views.notice(status, message, self.csrf if authenticated else ''))
 
     def request_target(self):
         host = self.headers.get('Host', '')
-        if not HOST.fullmatch(host) or self.headers.get('Sec-Fetch-Site') == 'cross-site':
-            raise Error('仅支持通过 SSH 隧道打开本机后台链接。')
+        origin = self.server.origin(host)
+        if self.command == 'POST' and self.headers.get('Sec-Fetch-Site') == 'cross-site':
+            raise Error('请直接打开后台链接。')
         target = urlsplit(self.path)
         if target.scheme or target.netloc or not target.path.startswith('/'):
             raise Error('请求地址无效。')
-        return host, target
+        return origin, target
 
     def authenticated(self):
-        if not self.server.session or time.monotonic() - self.server.last_used >= IDLE:
-            return False
         cookies = SimpleCookie()
         try:
             cookies.load(self.headers.get('Cookie', ''))
         except CookieError:
             return False
-        token = cookies.get('relay_admin')
-        if token and token.value.isascii() and compare_digest(token.value, self.server.session):
-            self.server.last_used = time.monotonic()
-            return True
+        token = cookies.get('__Host-relay_admin' if self.server.domain else 'relay_admin')
+        with self.server.auth_lock:
+            self.server.refresh_password_version()
+            now = time.monotonic()
+            if not self.server.session or now - self.server.last_used >= IDLE:
+                return False
+            if token and token.value.isascii() and compare_digest(token.value, self.server.session):
+                self.session, self.csrf = self.server.session, self.server.csrf
+                self.server.last_used = now
+                return True
         return False
 
     def fields(self):
@@ -169,13 +199,12 @@ class AdminHandler(BaseHTTPRequestHandler):
         try:
             _, target = self.request_target()
         except (Error, ValueError):
-            return self.error(403, '仅支持通过 SSH 隧道打开本机后台地址。')
+            return self.error(403, '请直接使用 VPS 菜单显示的后台地址。')
         asset = {'/style.css': ('style.css', 'text/css'), '/app.js': ('app.js', 'text/javascript'),
                  '/icon.png': ('icon.png', 'image/png')}.get(target.path)
         if asset:
             return self.response(200, (ASSETS / asset[0]).read_bytes(), asset[1])
         try:
-            self.server.refresh_password_version()
             if target.path == '/login':
                 destination = safe_destination(parse_qs(target.query, max_num_fields=4).get('next', [''])[0])
                 return self.response(200, views.login(destination))
@@ -183,13 +212,13 @@ class AdminHandler(BaseHTTPRequestHandler):
                 return self.redirect('/login?next=' + quote(safe_destination(target.path), safe='/'))
             self.page(target.path)
         except (AccessError, Error) as exc:
-            self.error(400, str(exc), bool(self.server.session))
+            self.error(400, str(exc), bool(self.session))
         except (OSError, KeyError, TypeError, ValueError):
             self.error(500, '暂时无法读取后台或节点配置，请从 VPS 终端检查状态。')
 
     def page(self, path):
         manager = self.server.manager
-        csrf = self.server.csrf
+        csrf = self.csrf
         match = NODE.fullmatch(path)
         with manager.lock():
             if path == '/':
@@ -226,41 +255,46 @@ class AdminHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            host, target = self.request_target()
-            if self.headers.get('Origin') != 'http://' + host:
+            origin, target = self.request_target()
+            if self.headers.get('Origin') != origin:
                 return self.error(403, '请求来源无效，请从后台页面重新操作。')
-            self.server.refresh_password_version()
             if target.path == '/login':
                 return self.sign_in()
             if not self.authenticated():
                 return self.redirect('/login')
             fields = self.fields()
             token = fields.get('csrf', '')
-            if not token.isascii() or not compare_digest(token, self.server.csrf):
+            if not token.isascii() or not compare_digest(token, self.csrf):
                 return self.error(403, '会话验证失败，请刷新页面。', True)
             self.update(target.path, fields)
         except (AccessError, Error) as exc:
-            self.error(400, str(exc), bool(self.server.session))
+            self.error(400, str(exc), bool(self.session))
         except (OSError, KeyError, TypeError, ValueError):
             self.error(500, '操作未完成，请重新打开节点详情核对结果。')
 
     def sign_in(self):
         fields = self.fields()
         destination = safe_destination(fields.get('next', ''))
-        if not self.server.recent_lockout() and self.server.login(fields.get('password', '')):
-            return self.redirect(destination, ('Set-Cookie',
-                'relay_admin=' + self.server.session + '; Path=/; HttpOnly; SameSite=Strict'))
-        wait = self.server.recent_lockout()
+        session, wait = self.server.login(self.client_address[0], fields.get('password', ''))
+        if session:
+            return self.redirect(destination, ('Set-Cookie', self.cookie(session)))
         if wait:
             return self.response(429, views.login(destination, '尝试次数过多，请在 ' + str(wait) + ' 秒后重试。'),
                                  headers=(('Retry-After', str(wait)),))
         self.response(401, views.login(destination, '后台密码不正确。'))
 
+    def cookie(self, value):
+        name = '__Host-relay_admin' if self.server.domain else 'relay_admin'
+        secure = '; Secure' if self.server.domain else ''
+        return name + '=' + value + '; Path=/; HttpOnly; SameSite=Strict' + secure + ('' if value else '; Max-Age=0')
+
     def update(self, path, fields):
         manager = self.server.manager
         if path == '/logout':
-            self.server.session = self.server.csrf = ''
-            return self.redirect('/login', ('Set-Cookie', 'relay_admin=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict'))
+            with self.server.auth_lock:
+                if self.session == self.server.session:
+                    self.server.session = self.server.csrf = ''
+            return self.redirect('/login', ('Set-Cookie', self.cookie('')))
         match = NODE.fullmatch(path)
         action = match.group(2) if match else ''
         if path != '/add' and action not in ('edit', 'detect'):
@@ -278,7 +312,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             try:
                 saved = save_node(manager, fields, previous)
             except (Error, AccessError) as exc:
-                return self.response(400, views.edit(previous, self.server.csrf, str(exc)))
+                return self.response(400, views.edit(previous, self.csrf, str(exc)))
         self.redirect('/nodes/' + str(saved['port']))
 
 

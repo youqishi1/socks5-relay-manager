@@ -16,7 +16,7 @@ TCP 使用 Shadowsocks 2022，TUIC 使用 QUIC/TLS。两种入口共用公网端
 以 root 登录，普通用户先 `sudo -i`，再复制一整行：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.6.0/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.6.1/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
 ```
 
 固定版本安装包先校验 SHA-256，再执行安装。交互终端安装后自动打开菜单，以后 root 输入 `sb1`，普通用户输入 `sudo sb1`。原命令 `socks-menu` 继续可用。若 `/usr/local/bin/sb1` 已被其他程序占用，安装器拒绝覆盖。没有 curl 时先安装 `curl ca-certificates`。下载源码后在源码目录执行 `bash install.sh --local`。
@@ -81,7 +81,11 @@ socks5://账号:密码@IP:端口
 
 配置成功后，端口及 SS/TUIC 账密保留，所有现有双模式入口改用域名 SNI，新添加的入口也自动使用该证书。菜单 **16/18** 获取更新后的 `TUIC-普通链接.txt`，把普通 `tuic://` 链接加入 MiSub；客户端使用系统 CA 验证，无需单独安装自签证书。节点仍可使用 VPS IP 连接，SNI 使用配置的域名；支持 TUIC v5 的客户端必须保留 SNI/ALPN。不要在 MiSub 开启跳过证书验证。已有订阅需更新一次。
 
-**私有网页后台 / 小火箭扫码**：在电脑的 PowerShell 或终端建立 SSH 隧道并打开后台：
+**HTTPS 域名后台 / 小火箭扫码**：有菜单 **22** 配置的公共 CA 证书时，在 VPS 选 `sb1` → **28 → 1**。程序复用证书域名，HTTPS 默认使用 TCP 443。该端口被占用或无法从公网访问时，可选 8443 等公网可达的 TCP 端口。首次设置自己的后台密码后，任何可连接此 VPS 的电脑都可以用浏览器打开菜单给出的 HTTPS 地址。打开前请确认域名 A 记录指向这台 VPS，云安全组和系统防火墙允许所选 TCP 端口。Cloudflare DNS 使用仅 DNS。`sb1` → **27** 查看后台链接，**23** 查看指定 TUIC 节点的二维码链接，**28 → 2** 关闭域名访问。
+
+域名后台由 systemd 监听端口，有访问时才启动网页进程，闲置 15 分钟退出，后续访问会再次启动。只有 HTTPS，后台密码只保存加盐哈希。公网模式连续输错 5 次会暂停该来源 IP 登录 5 分钟，并限制全局密码校验频率。同时打开的网页登录以最近一次登录为准。
+
+**SSH 本机访问**：也可在电脑的 PowerShell 或终端建立 SSH 隧道并打开后台：
 
 ```bash
 ssh -t -o ExitOnForwardFailure=yes -L 127.0.0.1:18765:127.0.0.1:18765 root@你的VPS地址 sb1 web
@@ -122,6 +126,7 @@ ssh -t -o ExitOnForwardFailure=yes -L 127.0.0.1:18765:127.0.0.1:18765 root@你�
 | 25 | 按节点关闭 SS、选择仅 TUIC 或 Hysteria 2，或恢复原兼容模式 |
 | 26 | 按节点切换共享或独立 sing-box |
 | 27 | 启动私有网页后台，关闭后回到终端菜单 |
+| 28 | 启用、修改或关闭 HTTPS 域名后台 |
 
 指定中转编号是内部 20001 等端口。修改上游保留入口凭据，密码留空保留旧值。增删改仅重启对应实例，其他出口继续运行。
 

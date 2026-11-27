@@ -1149,11 +1149,13 @@ def configure_topology(manager):
 
 def uninstall(manager):
     from shared_access import UNIT
+    from domain_web import disable as disable_domain_web
     print('卸载仅删除本项目程序、服务和命令；默认保留 root 可读配置、凭据、备份和日志。')
     if ask('请输入 UNINSTALL 确认卸载') != 'UNINSTALL':
         raise Error('已取消。')
     with manager.lock():
         manager.backup()
+        disable_domain_web(manager)
         if Path('/etc/systemd/system', UNIT).exists():
             manager.backend.stop_shared()
             manager.start_shared((None, []))
@@ -1188,7 +1190,7 @@ def menu(manager):
             state = '运行中' if enabled and running == len(enabled) else ('部分运行/异常' if running else '未运行/暂无启用代理')
             print('\n========================================\n        SOCKS5 中转管理系统\n========================================')
             print('系统状态：' + state + '\n代理数量：' + str(len(rows)) + '\n端口范围：20001-29999')
-            print('1. 一键添加加密 TCP + TUIC（粘贴整条 SOCKS5）\n2. 查看全部中转\n3. 删除 SOCKS5 中转\n4. 修改 SOCKS5 中转\n5. 检测所有代理出口 IP\n6. 检测指定代理\n7. 重启代理服务\n8. 查看运行状态\n9. 查看日志\n10. 备份配置\n11. 恢复配置\n12. 更新程序\n13. 卸载程序\n14. 高级：复用现有 TUIC 导出配置\n15. 高级：手动添加本机中转\n16. 查看全部连接信息和账密\n17. 高级：粘贴整条信息添加本机中转\n18. 重新导出双模式客户端文件\n19. 给已有中转启用加密 TCP + TUIC\n20. 设置 VPS 公网 IP/域名\n21. 高级：添加原生 SOCKS5 中转\n22. 配置域名证书（MiSub / 小火箭 / v2rayN 分发）\n23. 在浏览器打开 TUIC 二维码\n24. 一键诊断连接（已启用入口 / 上游 / 证书）\n25. 调整公网入口（关闭 SS / TUIC / Hysteria 2）\n26. 按端口选择共享或独立 sing-box\n27. 打开私有网页管理后台\n0. 退出')
+            print('1. 一键添加加密 TCP + TUIC（粘贴整条 SOCKS5）\n2. 查看全部中转\n3. 删除 SOCKS5 中转\n4. 修改 SOCKS5 中转\n5. 检测所有代理出口 IP\n6. 检测指定代理\n7. 重启代理服务\n8. 查看运行状态\n9. 查看日志\n10. 备份配置\n11. 恢复配置\n12. 更新程序\n13. 卸载程序\n14. 高级：复用现有 TUIC 导出配置\n15. 高级：手动添加本机中转\n16. 查看全部连接信息和账密\n17. 高级：粘贴整条信息添加本机中转\n18. 重新导出双模式客户端文件\n19. 给已有中转启用加密 TCP + TUIC\n20. 设置 VPS 公网 IP/域名\n21. 高级：添加原生 SOCKS5 中转\n22. 配置域名证书（MiSub / 小火箭 / v2rayN 分发）\n23. 在浏览器打开 TUIC 二维码\n24. 一键诊断连接（已启用入口 / 上游 / 证书）\n25. 调整公网入口（关闭 SS / TUIC / Hysteria 2）\n26. 按端口选择共享或独立 sing-box\n27. 查看网页管理后台地址\n28. 设置域名 HTTPS 后台\n0. 退出')
             option = ask('请输入选项')
             if option == '0':
                 return
@@ -1212,10 +1214,19 @@ def menu(manager):
                 uninstall(manager)
                 return
             if option in ('23', '27'):
+                from domain_web import domain_url
                 from web_admin import serve
                 with manager.lock():
                     path = show_tuic_qr(manager) if option == '23' else '/'
-                serve(manager, path)
+                    url = domain_url(manager, path)
+                if url:
+                    print('浏览器地址：' + url)
+                else:
+                    serve(manager, path)
+                continue
+            if option == '28':
+                from domain_web import configure as configure_domain_web
+                configure_domain_web(manager)
                 continue
             with manager.lock():
                 if option == '1':
@@ -1324,7 +1335,7 @@ def menu(manager):
                 elif option == '26':
                     configure_topology(manager)
                 else:
-                    print('无效选项，请输入 0–27。')
+                    print('无效选项，请输入 0–28。')
         except Error as exc:
             print('错误：' + str(exc))
             if (manager.root / 'pending.json').exists():
@@ -1361,6 +1372,9 @@ def main():
     elif args == ['web-password']:
         from web_admin import set_password
         set_password(manager)
+    elif args == ['web-domain-run']:
+        from domain_web import run
+        run(manager)
     elif args == ['uninstall']:
         uninstall(manager)
     elif len(args) == 2 and args[0] == 'run' and args[1].isdecimal() and FIRST <= int(args[1]) <= LAST:

@@ -192,6 +192,8 @@ def install(manager, item, app):
         folder = Path(temporary)
         folder.chmod(0o700)
         unpack(archive, folder, item['tag'])
+        if (manager.root / 'web-domain.json').exists() and not (folder / 'scripts/domain_web.py').is_file():
+            raise UpdateError('所选旧版不支持域名后台。请先用菜单 28 关闭域名访问。')
         if not (folder / 'scripts/shared_access.py').is_file() and any(row.get('shared') for row in manager.rows()):
             raise UpdateError('所选旧版不支持共享入口。请先用菜单 26 将共享节点切换为独立。')
         certificate_settings = manager.root / 'domain-certificate.json'

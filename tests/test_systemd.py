@@ -57,6 +57,42 @@ try:
         settings.unlink()
     assert not m.listening(PORT, '127.0.0.1')
     print('PASS: installed sb1 web starts on demand, ships UI assets and stops without a service', flush=True)
+    import certificates
+    import domain_web
+    from test_certificates import CertificateTests
+    from test_domain_web import LocalHTTPS
+    CertificateTests.setUpClass()
+    fixture = CertificateTests()
+    cert_settings = dict(domain=fixture.domain, email='', webroot='', challenge=certificates.DNS01)
+    settings_file = manager.root / certificates.SETTING
+    cert, key = certificates.material_paths(m.APP, fixture.domain)
+    public_port = m.free_port()
+    try:
+        m.atomic(cert, fixture.cert)
+        m.atomic(key, fixture.key)
+        m.write_json(settings_file, cert_settings)
+        m.write_json(settings, {'salt': salt.hex(), 'digest': password_digest('install-fixture-password', salt).hex()})
+        with patch.dict(os.environ, {'SSL_CERT_FILE': str(cert)}), manager.lock():
+            domain_web.install(manager, public_port, cert_settings)
+        assert manager.backend.call('is-active', '--quiet', domain_web.SOCKET, required=False)
+        assert not manager.backend.call('is-active', '--quiet', domain_web.SERVICE, required=False)
+        conn = LocalHTTPS(fixture.domain, public_port, context=fixture.context(), timeout=8)
+        try:
+            conn.request('GET', '/')
+            response = conn.getresponse()
+            assert response.status == 303 and response.getheader('Location') == '/login?next=/'
+            response.read()
+        finally:
+            conn.close()
+        assert manager.backend.call('is-active', '--quiet', domain_web.SERVICE, required=False)
+    finally:
+        with manager.lock():
+            domain_web.disable(manager)
+        for path in (settings, settings_file, cert, key):
+            path.unlink(missing_ok=True)
+        CertificateTests.tearDownClass()
+    assert not m.listening(public_port, '127.0.0.1')
+    print('PASS: installed domain HTTPS activates on request and disables cleanly', flush=True)
     with manager.lock():
         for i in range(3):
             row = dict(port=manager.allocate(), upstream_host='127.0.0.1', upstream_port=upstream.server_address[1],

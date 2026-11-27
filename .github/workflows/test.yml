@@ -30,6 +30,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends python3-opencv zbar-tools
           python3 tests/test_qr.py
           python3 tests/test_web.py
+          python3 tests/test_domain_web.py
       - name: Bash syntax and ShellCheck
         run: |
           sudo apt-get update
