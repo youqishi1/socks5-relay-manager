@@ -180,7 +180,7 @@ EOF
 fi
 echo '正在下载固定版本 v1.6.2 安装包...'
 relay_download 'https://github.com/youqishi1/socks5-relay-manager/releases/download/v1.6.2/socks5-relay-manager-v1.6.2-install.tar.gz' \
-    '8369d2331571bc913449d62d30dbda9ef0c98c6745618819e57e758da1400428' "$work/install.tar.gz"
+    '1256962de903c84379daa70b6cfc5b3a334413c79af1b9999921c00133217956' "$work/install.tar.gz"
 mkdir "$work/source"
 tar -xzf "$work/install.tar.gz" -C "$work/source"
 bash "$work/source/install.sh" --local

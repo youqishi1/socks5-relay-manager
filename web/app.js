@@ -30,7 +30,7 @@ async function copyShare(value) {
     fallback.hidden = false;
     fallback.focus();
     fallback.select();
-    status.textContent = '已选中链接，请按 Ctrl+C 复制。';
+    status.textContent = '已选中链接，请复制。';
   }
   status.hidden = false;
 }
