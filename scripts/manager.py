@@ -454,6 +454,40 @@ class Manager:
         address = '127.0.0.1' if row['bind'] == '0.0.0.0' else row['bind']
         return health(address, row['port'], row['client_user'], row['client_password'], self.ip_url)
 
+    def exit_locations(self, rows, refresh=False):
+        from concurrent.futures import ThreadPoolExecutor
+        from exit_location import country_for
+
+        pointers = self.pointers()
+        candidates = [row for row in rows if row['enabled'] and row.get('access')]
+
+        def detect(row):
+            port = row['port']
+            path = self.revision(port, pointers[str(port)]) / 'exit-location.json'
+            if not refresh:
+                try:
+                    cached = read_json(path)
+                    age = time.time() - cached['checked']
+                    if 0 <= age < (86400 if cached['country'] else 300):
+                        return port, (cached['ip'], cached['country'])
+                except (Error, KeyError, TypeError, OSError):
+                    pass
+            try:
+                ip, _ = self.verify(row)
+            except (Error, OSError):
+                ip = ''
+            country = country_for(ip) if ip else ''
+            try:
+                write_json(path, {'ip': ip, 'country': country, 'checked': time.time()})
+            except OSError:
+                pass
+            return port, (ip, country)
+
+        if not candidates:
+            return {}
+        with ThreadPoolExecutor(max_workers=min(4, len(candidates))) as pool:
+            return dict(pool.map(detect, candidates))
+
     def backup(self):
         directory = self.root / 'backups'
         name = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:8] + '.backup.json'
@@ -825,10 +859,13 @@ def public_address(manager):
     return address
 
 
-def export_dual(manager):
+def export_dual(manager, refresh=False):
     from access import AccessError, configs
+    rows = manager.rows()
+    address = public_address(manager)
+    locations = manager.exit_locations(rows, refresh=refresh)
     try:
-        files = configs(manager.rows(), public_address(manager))
+        files = configs(rows, address, locations)
     except AccessError as exc:
         raise Error(str(exc)) from None
     directory = manager.root / 'exports' / 'dual'
@@ -841,20 +878,21 @@ def export_dual(manager):
     # Keep QR snapshots already requested by the user in sync with credentials
     # and certificate changes, without generating images for every unused node.
     from tuic_qr import build, png
-    rows = {row['port']: row for row in manager.rows() if row['enabled'] and row.get('access')}
+    rows = {row['port']: row for row in rows if row['enabled'] and row.get('access')}
     for path in directory.glob('TUIC-*-二维码.png'):
         match = re.fullmatch(r'TUIC-(2[0-9]{4})-二维码\.png', path.name)
         if not match or not path.is_file():
             continue
         row = rows.get(int(match.group(1)))
         if row and row['access'].get('certificate_trust') == 'system' and row['access'].get('profile') != 'hysteria2-only':
-            _, code = build(row, public_address(manager))
+            _, code = build(row, address, locations)
             atomic(path, png(code))
         else:
             path.unlink()
     atomic(directory / '使用说明.txt', '\n'.join([
         '加密 TCP + TUIC 使用说明',
         '通过 SSH/SFTP 下载本目录，配置含客户端凭据，勿公开或上传共享。',
+        '节点名称包含实测 SOCKS5 出口 IP 和国家/地区。出口变化后，菜单 18 重新检测并导出。',
         'Clash Verge：导入本地 clash-dual.yaml 并启用；列表只包含当前开启的协议。',
         '菜单 25 可关闭闲置 SS，选择仅 TUIC 或仅 Hysteria 2；切换后重新导入文件或链接。HY2 使用 v2rayn-hysteria2.json 或 HY2-普通链接.txt。',
         'v2rayN：复制 v2rayN-一键导入.txt 的全部内容，从剪贴板导入两种模式。TUIC 使用保留证书的内部分享格式，需支持 ConfigVersion 4。',
@@ -909,7 +947,7 @@ def enable_dual(manager, row=None):
     show_connection(row, manager)
 
 
-def show_connection(row, manager=None):
+def show_connection(row, manager=None, locations=None):
     if row.get('access'):
         from access import configs, METHOD
         address = public_address(manager) if manager else vps_address({'bind': '0.0.0.0'})
@@ -928,7 +966,9 @@ def show_connection(row, manager=None):
         else:
             print('Hysteria 2 密码：' + front['hy2_password'])
         if row['enabled']:
-            print(configs([row], address)['连接信息.txt'])
+            if manager is not None and locations is None:
+                locations = manager.exit_locations([row])
+            print(configs([row], address, locations)['连接信息.txt'])
         print('请允许云安全组/防火墙中的 ' + str(front['port']) + ('/TCP 和 ' + str(front['port']) if profile(front) == 'compat' else '') + '/UDP；不要开放内部中转端口。')
         return
     # Detect local public IPv4 without any direct external HTTP/IP probe.
@@ -953,9 +993,10 @@ def show_all_connections(manager):
         print('暂无中转。')
         return
     print('全部中转连接信息与账密，共 ' + str(len(rows)) + ' 条。仅在 root 私有终端查看。')
+    locations = manager.exit_locations(rows)
     for index, row in enumerate(rows, 1):
         print('\n========== 第 ' + str(index) + ' 条 / 中转编号 ' + str(row['port']) + ' ==========')
-        show_connection(row, manager)
+        show_connection(row, manager, locations)
     print('\n以上包含连接秘密，请勿公开。TUIC 短链接需要配套证书；一键导入文件已包含证书信任。')
 
 
@@ -969,7 +1010,7 @@ def show_tuic_qr(manager):
     if not row['enabled'] or not row.get('access'):
         raise Error('请选择已启用的双模式节点。')
     try:
-        _, code = build(row, public_address(manager))
+        _, code = build(row, public_address(manager), manager.exit_locations([row]))
     except AccessError as exc:
         raise Error(str(exc)) from None
     path = manager.root / 'exports' / 'dual' / ('TUIC-' + str(row['port']) + '-二维码.png')
@@ -1197,7 +1238,8 @@ def menu(manager):
                     manager.apply({row['port']: row})
                     show_connection(row)
                 elif option == '18':
-                    export_dual(manager)
+                    print('正在检测 SOCKS5 出口 IP 和地区，并重新导出客户端文件…')
+                    export_dual(manager, refresh=True)
                 elif option == '19':
                     enable_dual(manager, select_row(manager))
                 elif option == '20':

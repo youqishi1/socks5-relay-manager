@@ -152,9 +152,16 @@ class Entrances(unittest.TestCase):
         legacy['access'].pop('profile')
         legacy['access'].pop('hy2_password')
         legacy['access']['port'] += 1
-        files = access.configs([self.row, legacy], '203.0.113.1')
+        from urllib.parse import unquote, urlsplit
+        port = self.row['port']
+        files = access.configs([self.row, legacy], '203.0.113.1',
+                               {port: ('2001:4860:4860::8888', '美国'), legacy['port']: ('1.1.1.1', '')})
         clash = json.loads(files['clash-dual.yaml'])
         self.assertEqual([n['type'] for n in clash['proxies']], ['hysteria2', 'ss', 'tuic'])
+        name = f'美国-2001:4860:4860::8888-{port}-HY2'
+        self.assertEqual(clash['proxies'][0]['name'], name)
+        self.assertEqual(unquote(urlsplit(files['HY2-普通链接.txt'].strip()).fragment), name)
+        self.assertEqual(clash['proxies'][1]['name'], f"地区未知-1.1.1.1-{legacy['port']}-TCP")
         self.assertEqual(len(json.loads(files['v2rayn-tcp.json'])['outbounds']), 1)
         self.assertEqual(len(json.loads(files['v2rayn-hysteria2.json'])['outbounds']), 1)
 

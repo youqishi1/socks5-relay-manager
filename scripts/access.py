@@ -162,11 +162,12 @@ def tuic_link(front, address, label):
             + ':' + str(front['port']) + '?' + query + '#' + quote(label, safe=''))
 
 
-def configs(rows, address):
+def configs(rows, address, locations=None):
     rows = list(rows)
     if any(row.get('access', {}).get('profile') for row in rows):
         from entrance_profiles import export_profiles
-        return export_profiles(rows, address)
+        return export_profiles(rows, address, locations)
+    from exit_location import label
     from urllib.parse import quote
     clash = {'mode': 'rule', 'allow-lan': False, 'log-level': 'error',
              'proxies': [], 'proxy-groups': [], 'listeners': [], 'rules': []}
@@ -190,7 +191,7 @@ def configs(rows, address):
     for row in rows:
         front = validate(row['access'])
         port, public = row['port'], front['port']
-        tcp_tag, tuic_tag, selector = '出口-' + str(port) + '-TCP', '出口-' + str(port) + '-TUIC', '出口-' + str(port) + '-模式'
+        tcp_tag, tuic_tag, selector = (label(port, suffix, locations) for suffix in ('TCP', 'TUIC', '模式'))
         groups.append(selector)
         clash['proxies'] += [
             {'name': tcp_tag, 'type': 'ss', 'server': address, 'port': public, 'cipher': METHOD,

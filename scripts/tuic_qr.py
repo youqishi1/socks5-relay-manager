@@ -8,16 +8,16 @@ from qrcodegen import QrCode
 BORDER = 4
 
 
-def build(row, address):
+def build(row, address, locations=None):
     front = row.get('access', {})
     if front.get('profile') == 'hysteria2-only':
         raise AccessError('当前已切换为 Hysteria 2，未启用 TUIC；请用菜单 16 的 HY2 普通链接导入。')
     if not system_trust(front):
         raise AccessError('手机扫码请先用菜单 22 配置域名公共 CA 证书；自签证书不能只靠普通链接完成信任。')
     # The normal exporter validates the endpoint, credentials and TLS settings.
-    link = configs([row], address)['TUIC-普通链接.txt'].strip()
-    # An ASCII remark saves space without changing authentication or TLS fields.
-    link = link.split('#', 1)[0] + '#TUIC-' + str(row['port'])
+    link = configs([row], address, locations)['TUIC-普通链接.txt'].strip()
+    if locations is None or row['port'] not in locations:
+        link = link.split('#', 1)[0] + '#TUIC-' + str(row['port'])
     return link, QrCode.encode_text(link, QrCode.Ecc.MEDIUM)
 
 

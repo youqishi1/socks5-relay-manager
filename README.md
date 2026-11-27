@@ -16,7 +16,7 @@ TCP 使用 Shadowsocks 2022，TUIC 使用 QUIC/TLS。两种入口共用公网端
 以 root 登录，普通用户先 `sudo -i`，再复制一整行：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.5.3/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.5.4/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
 ```
 
 固定版本安装包先校验 SHA-256，再执行安装。交互终端安装后自动打开菜单，以后 root 输入 `sb1`，普通用户输入 `sudo sb1`。原命令 `socks-menu` 继续可用。若 `/usr/local/bin/sb1` 已被其他程序占用，安装器拒绝覆盖。没有 curl 时先安装 `curl ca-certificates`。下载源码后在源码目录执行 `bash install.sh --local`。
@@ -38,6 +38,8 @@ Debian 11 使用项目专用官方归档源，文件仅保存在项目 `apt-comp
 **菜单 24 一键诊断连接**检查 DNS、内部服务、上游出口、SS/TUIC 监听、证书/SNI、相关本机防火墙规则，并在 VPS 上使用真实临时客户端验证 SS 和 TUIC。证书验证保持开启，不改原节点、防火墙或 DNS，不显示账密。多节点按编号选一条，避免重复请求所有出口。回环成功只说明 VPS 内部链路正常，无法证明青岛到 VPS 的公网、云安全组或 MiSub 导入一定正常；出口查询耗时也不是 ping。
 
 **菜单 26 选择共享或独立 sing-box**。输入中转编号，例如 `20001,20002`，或输入 `all` 批量选择。选 **1 共享**时，每台 VPS 的共享节点共用一个 sing-box，仍分别使用原有公网端口、账密、证书和 SOCKS5 出口。选 **2 独立**时，每个选中的节点使用自己的 sing-box。两种模式可以混用，3proxy 继续按中转端口运行。升级保留现有模式。更改共享组配置时，组内连接可能短暂断开，原链接仍有效。回退到不支持共享的版本前，先把共享节点切回独立。
+
+导出的 SS、TUIC 和 Hysteria 2 节点及 TUIC 二维码使用同一套命名，例如 `美国-8.8.8.8-20001-TUIC`。IP 经过固定 SOCKS5 出口实测，国家/地区来自 [IPWhois](https://ipwhois.io/documentation)，查地区时只发送测到的公网 IP。出口测不到时显示“出口未验证”，仅地区查不到时保留 IP 并显示“地区未知”。菜单 **18** 强制重新检测并导出，菜单 **16** 直接查看带名称的链接。节点名称是检测时的结果，上游更换 IP 后可再次用菜单 18 刷新。
 
 ### 离线安装
 
@@ -79,7 +81,7 @@ socks5://账号:密码@IP:端口
 
 配置成功后，端口及 SS/TUIC 账密保留，所有现有双模式入口改用域名 SNI，新添加的入口也自动使用该证书。菜单 **16/18** 获取更新后的 `TUIC-普通链接.txt`，把普通 `tuic://` 链接加入 MiSub；客户端使用系统 CA 验证，无需单独安装自签证书。节点仍可使用 VPS IP 连接，SNI 使用配置的域名；支持 TUIC v5 的客户端必须保留 SNI/ALPN。不要在 MiSub 开启跳过证书验证。已有订阅需更新一次。
 
-**小火箭扫码（v1.3.3）**：运行 `sb1` → **23**，单节点直接显示，多节点选择对应中转。使用普通 `tuic://` 生成紧凑二维码，手机在小火箭打开扫码功能，对准终端即可导入，扫码后按回车返回菜单；二维码备注为 `TUIC-20001` 等，UUID、密码、地址、端口、SNI、ALPN、BBR 和证书验证设置保留。二维码及 PNG 均在 VPS 本地生成，不上传第三方二维码网站，也不新增常驻服务或图像依赖。
+**小火箭扫码（v1.3.3）**：运行 `sb1` → **23**，单节点直接显示，多节点选择对应中转。使用普通 `tuic://` 生成紧凑二维码，手机在小火箭打开扫码功能，对准终端即可导入，扫码后按回车返回菜单；二维码备注与普通链接使用相同的出口名称，UUID、密码、地址、端口、SNI、ALPN、BBR 和证书验证设置保留。二维码及 PNG 均在 VPS 本地生成，不上传第三方二维码网站，也不新增常驻服务或图像依赖。
 
 PNG 保存到 `/etc/socks5-relay-manager/exports/dual/TUIC-20001-二维码.png`（对应中转编号、仅 root 可读）。二维码保留完整白边，终端用半块字符压缩高度；窗口太窄/太矮时提示最大化或调小字体，避免换行破坏二维码，也可通过 SFTP 下载 PNG。自签模式先使用菜单 **22** 配置公共 CA 域名证书，再扫码；不会为方便扫码关闭证书验证。二维码包含节点凭据，请只交给自己的客户端。小火箭实际导入由手机端完成。
 

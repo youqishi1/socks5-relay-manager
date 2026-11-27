@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from unittest.mock import patch
@@ -48,6 +49,23 @@ class InputTests(unittest.TestCase):
         self.assertEqual(row['bind'], '127.0.0.1')
         self.assertEqual(row['sources'], ['127.0.0.1'])
         self.assertGreaterEqual(len(row['client_password']), 32)
+
+    def test_measured_exit_cache_refresh_and_unavailable_fallback(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            manager = m.Manager(root=root / 'state', log=root / 'log')
+            row = {'port': 20001, 'enabled': True, 'access': {'port': 30001}}
+            manager.set_pointer(row['port'], {'revision': '1' * 32})
+            with patch.object(manager, 'verify', side_effect=[('8.8.8.8', 12), ('1.1.1.1', 13),
+                                                               m.Error('fixture exit unavailable')]) as verify, \
+                 patch('exit_location.country_for', side_effect=['美国', '']) as country:
+                self.assertEqual(manager.exit_locations([row]), {20001: ('8.8.8.8', '美国')})
+                self.assertEqual(manager.exit_locations([row]), {20001: ('8.8.8.8', '美国')})
+                verify.assert_called_once_with(row)
+                self.assertEqual(manager.exit_locations([row], refresh=True), {20001: ('1.1.1.1', '')})
+                manager.set_pointer(row['port'], {'revision': '2' * 32})
+                self.assertEqual(manager.exit_locations([row]), {20001: ('', '')})
+                self.assertEqual(country.call_count, 2)
 
 
 class DualProcesses(relay.Processes):
@@ -159,7 +177,23 @@ class DualChains(unittest.TestCase):
     def test_singbox_tuic(self): self.chain('sing', 'tuic')
 
     def test_export_validation_and_secret_boundaries(self):
-        configs = a.configs(self.rows, '203.0.113.1')
+        from urllib.parse import unquote, urlsplit
+
+        port = self.rows[0]['port']
+        configs = a.configs(self.rows, '203.0.113.1', {port: ('8.8.8.8', '美国')})
+        tcp_name = f'美国-8.8.8.8-{port}-TCP'
+        tuic_name = f'美国-8.8.8.8-{port}-TUIC'
+        clash = json.loads(configs['clash-dual.yaml'])
+        self.assertEqual([node['name'] for node in clash['proxies'][:2]], [tcp_name, tuic_name])
+        self.assertEqual(clash['proxy-groups'][0]['proxies'], [tuic_name, tcp_name])
+        self.assertEqual(clash['proxies'][0]['server'], '203.0.113.1')
+        client = json.loads(configs['v2rayn-tuic.json'])
+        self.assertEqual(client['route']['rules'][0]['outbound'], tuic_name)
+        ss, internal = configs['v2rayN-一键导入.txt'].splitlines()[:2]
+        self.assertEqual(unquote(urlsplit(ss).fragment), tcp_name)
+        payload = internal.rsplit('/', 1)[1]
+        self.assertEqual(json.loads(base64.urlsafe_b64decode(payload + '=' * (-len(payload) % 4)))['Remarks'], tuic_name)
+        self.assertEqual(unquote(urlsplit(configs['TUIC-普通链接.txt'].splitlines()[0]).fragment), tuic_name)
         for data in configs.values():
             self.assertNotIn(self.rows[0]['upstream_password'], data)
             self.assertNotIn(self.rows[0]['upstream_user'], data)

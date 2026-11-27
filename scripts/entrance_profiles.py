@@ -46,8 +46,9 @@ def render_profile(config, front):
     return config
 
 
-def export_profiles(rows, address):
+def export_profiles(rows, address, locations=None):
     import access
+    from exit_location import label
     rows = sorted((row for row in rows if row['enabled'] and row.get('access')), key=lambda row: row['port'])
     if not rows:
         raise access.AccessError('暂无启用的加密入口。')
@@ -56,7 +57,7 @@ def export_profiles(rows, address):
         access.validate(original['access'])
         clean['access'].pop('profile', None)
         clean['access'].pop('hy2_password', None)
-    files = access.configs(base_rows, address)
+    files = access.configs(base_rows, address, locations)
     clash = json.loads(files['clash-dual.yaml'])
     tcp = json.loads(files['v2rayn-tcp.json'])
     tuic = json.loads(files['v2rayn-tuic.json'])
@@ -70,7 +71,7 @@ def export_profiles(rows, address):
         group = clash['proxy-groups'][index]
         nodes = {'tcp': tcp_node, 'tuic': udp_node}
         if 'hysteria2' in allowed:
-            tag = '出口-' + str(row['port']) + '-HY2'
+            tag = label(row['port'], 'HY2', locations)
             nodes['hysteria2'] = dict(name=tag, type='hysteria2', server=address, port=front['port'],
                                      password=front['hy2_password'], sni=access.server_name(front),
                                      alpn=['h3'], **{'skip-cert-verify': False})
@@ -88,7 +89,7 @@ def export_profiles(rows, address):
             rule = copy.deepcopy(source['route']['rules'][index])
             rule['outbound'] = outbound['tag']
             client['route']['rules'].append(rule)
-        legacy = access.configs([base_rows[index]], address)
+        legacy = access.configs([base_rows[index]], address, locations)
         ss_link, internal = legacy['v2rayN-一键导入.txt'].splitlines()
         common = legacy['TUIC-普通链接.txt'].strip()
         details += ['中转 ' + str(row['port']) + '：' + PROFILES[profile(front)]]

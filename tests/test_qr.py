@@ -102,6 +102,8 @@ class QRTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             instance = Mock(root=Path(directory))
             instance.rows.return_value = [self.row()]
+            locations = {20001: ('8.8.8.8', '美国')}
+            instance.exit_locations.return_value = locations
             instance.backend.active.return_value = True
             held = [False]
 
@@ -130,7 +132,9 @@ class QRTests(unittest.TestCase):
             path = instance.root / 'exports' / 'dual' / 'TUIC-20001-二维码.png'
             self.assertTrue(path.is_file())
             self.assertIn('小火箭 → 扫码', output.getvalue())
-            self.assertEqual(self.decode(cv2.imdecode(np.frombuffer(path.read_bytes(), dtype=np.uint8), cv2.IMREAD_GRAYSCALE)), tuic_qr.build(self.row(), '203.0.113.1')[0])
+            link = self.decode(cv2.imdecode(np.frombuffer(path.read_bytes(), dtype=np.uint8), cv2.IMREAD_GRAYSCALE))
+            self.assertEqual(link, access.configs([self.row()], '203.0.113.1', locations)['TUIC-普通链接.txt'].strip())
+            self.assertEqual(unquote(urlsplit(link).fragment), '美国-8.8.8.8-20001-TUIC')
             instance.apply.assert_not_called()
             instance.backend.apply.assert_not_called()
             if os.name == 'posix':
@@ -140,6 +144,7 @@ class QRTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             instance = Mock(root=Path(directory))
             instance.rows.return_value = [self.row()]
+            instance.exit_locations.return_value = {}
             output = io.StringIO()
             with patch.object(manager, 'public_address', return_value='203.0.113.1'), \
                  patch.object(manager.shutil, 'get_terminal_size', return_value=(40, 24)), \
@@ -155,6 +160,7 @@ class QRTests(unittest.TestCase):
             instance = Mock(root=Path(directory))
             row = self.row()
             instance.rows.return_value = [row]
+            instance.exit_locations.return_value = {}
             with patch.object(manager, 'public_address', return_value='203.0.113.1'), \
                  patch.object(manager.shutil, 'get_terminal_size', return_value=(40, 24)), \
                  patch('builtins.input', return_value=''), contextlib.redirect_stdout(io.StringIO()):
