@@ -258,6 +258,8 @@ mkdir "$stage/source"
 for entry in install.sh socks-menu.sh uninstall.sh VERSION scripts systemd; do
     cp -a -- "$source_dir/$entry" "$stage/source/"
 done
+mkdir "$stage/source/web"
+cp -a -- "$source_dir"/web/{app.js,style.css,icon.png} "$stage/source/web/"
 "$python" - "$stage/source" <<'PY'
 import pathlib, py_compile, sys
 p = pathlib.Path(sys.argv[1])
@@ -367,7 +369,7 @@ if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 release="$APP/releases/$version-$(date +%s)-$$"
 mkdir -m 700 "$release"
-for entry in install.sh socks-menu.sh uninstall.sh VERSION scripts systemd; do
+for entry in install.sh socks-menu.sh uninstall.sh VERSION scripts systemd web; do
     cp -a -- "$stage/source/$entry" "$release/"
 done
 # Local source trees may belong to an unprivileged login account. The service

@@ -1,11 +1,13 @@
 """Actual installer, systemd startup, repeat install, rollback and persistence."""
 import copy
 import contextlib
+import http.client
 import io
 import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 from unittest.mock import patch
 from urllib.parse import quote
 
@@ -31,6 +33,30 @@ try:
     menu = subprocess.run(['sb1'], input='0\n', text=True, capture_output=True, check=True)
     assert '查看全部连接信息和账密' in menu.stdout
     print('PASS: sb1 opens the actual Chinese management menu', flush=True)
+    from web_admin import PASSWORD_FILE, PORT, password_digest
+    settings = manager.root / PASSWORD_FILE
+    salt = b'disposable-fixture'
+    m.write_json(settings, {'salt': salt.hex(), 'digest': password_digest('install-fixture-password', salt).hex()})
+    web = subprocess.Popen(['sb1', 'web'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 5
+        while not m.listening(PORT, '127.0.0.1'):
+            assert web.poll() is None and time.monotonic() < deadline, 'installed web listener did not start'
+            time.sleep(.05)
+        for path, status in (('/', 303), ('/style.css', 200), ('/app.js', 200), ('/icon.png', 200)):
+            connection = http.client.HTTPConnection('127.0.0.1', PORT, timeout=5)
+            try:
+                connection.request('GET', path)
+                response = connection.getresponse()
+                assert response.status == status, path
+                response.read()
+            finally:
+                connection.close()
+    finally:
+        m.stop_process(web)
+        settings.unlink()
+    assert not m.listening(PORT, '127.0.0.1')
+    print('PASS: installed sb1 web starts on demand, ships UI assets and stops without a service', flush=True)
     with manager.lock():
         for i in range(3):
             row = dict(port=manager.allocate(), upstream_host='127.0.0.1', upstream_port=upstream.server_address[1],
@@ -76,7 +102,6 @@ try:
     assert manager.verify(rows[1])[0] == '127.0.0.2'
     print('PASS: actual systemd transaction rollback', flush=True)
     subprocess.run(['systemctl', 'kill', '--signal=SIGKILL', survivor_unit], check=True)
-    import time
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         try:
