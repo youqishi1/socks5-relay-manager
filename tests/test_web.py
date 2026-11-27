@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import manager
 import test_certificates
 import web_admin
+import web_views
 
 PASSWORD = 'local-fixture-password-42'
 UPSTREAM = 'new-proxy.example:1080:fixture-account:fixture-proxy-secret'
@@ -29,6 +30,7 @@ class Fixture:
                    bind='127.0.0.1', sources=['127.0.0.1'])
         self.data = {row['port']: row}
         self.writes = self.probes = 0
+        self.busy = False
         manager.write_json(root / 'public-address.json', {'address': '203.0.113.1'})
         self.write_password(PASSWORD)
 
@@ -37,7 +39,12 @@ class Fixture:
         manager.write_json(self.root / web_admin.PASSWORD_FILE,
                            {'salt': salt.hex(), 'digest': web_admin.password_digest(password, salt).hex()})
 
-    lock = staticmethod(contextlib.nullcontext)
+    @contextlib.contextmanager
+    def lock(self, wait=True, read_only=False):
+        if self.busy:
+            assert wait is False
+            raise manager.OperationBusy('正在更新中转，请稍后重试。')
+        yield
 
     def rows(self):
         return [copy.deepcopy(row) for row in self.data.values()]
@@ -142,7 +149,7 @@ class WebTests(unittest.TestCase):
         self.assertIn('8.8.8.8', body.decode())
         self.assertNotIn(UPSTREAM.encode(), body)
         form = {'csrf': self.server.csrf, 'upstream': UPSTREAM, 'mode': 'independent'}
-        self.assertEqual(self.call('/add', form, {'Origin': 'https://foreign.example'})[0], 403)
+        self.assertEqual(self.call('/add', {}, {'Origin': 'https://foreign.example'})[0], 403)
         self.assertEqual(self.call('/add', dict(form, csrf='invalid'))[0], 403)
         self.assertEqual(self.instance.writes, 0)
         before = self.instance.row(20001)
@@ -161,6 +168,32 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.instance.probes, 1)
         self.assertEqual(self.call('/logout', {'csrf': self.server.csrf})[0], 303)
         self.assertEqual(self.call('/nodes/20001/qr.png')[0], 303)
+
+    def test_home_copies_node_links_and_uses_cache_only_for_assets(self):
+        status, headers, _ = self.call('/style.css?v=' + web_views.VERSION)
+        self.assertEqual(status, 200)
+        self.assertIn('immutable', headers['Cache-Control'])
+        self.login()
+        status, headers, body = self.call('/')
+        self.assertEqual(status, 200)
+        self.assertEqual(headers['Cache-Control'], 'no-store')
+        html = body.decode()
+        self.assertIn('data-share="ss://', html)
+        self.assertIn('data-share="tuic://', html)
+        self.assertIn('复制当前列表链接', html)
+        self.assertNotIn('initial-fixture-secret', html)
+        self.instance.data[20002] = dict(self.instance.row(20001), port=20002, access=None)
+        self.instance.data[20001]['access'].pop('server_name')
+        self.instance.data[20001]['access'].pop('certificate_trust')
+        html = self.call('/')[2].decode()
+        self.assertIn('data-share="v2rayn://tuic/', html)
+        self.assertNotIn('data-share="tuic://', html)
+        self.assertEqual(self.instance.probes, 0)
+        self.instance.busy = True
+        self.assertEqual(self.call('/')[0], 409)
+        self.assertEqual(self.call('/nodes/20001')[0], 409)
+        self.assertEqual(self.call('/add')[0], 200)
+        self.assertEqual(self.call('/add', {'csrf': self.server.csrf, 'upstream': UPSTREAM, 'mode': 'shared'})[0], 409)
 
 
 if __name__ == '__main__':

@@ -28,6 +28,12 @@ second.requests, second.exit_source = [], '127.0.0.3'
 manager = m.Manager(ip_url='http://exit.invalid:' + str(target.server_address[1]))
 rows = []
 try:
+    with manager.lock():
+        try:
+            with manager.lock(wait=False, read_only=True):
+                raise AssertionError('web read should not acquire a lock during a configuration change')
+        except m.OperationBusy:
+            pass
     shortcut = Path('/usr/local/bin/sb1')
     assert shortcut.is_symlink() and os.readlink(shortcut) == '/usr/local/bin/socks-menu'
     menu = subprocess.run(['sb1'], input='0\n', text=True, capture_output=True, check=True)

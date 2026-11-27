@@ -162,21 +162,37 @@ def tuic_link(front, address, label):
             + ':' + str(front['port']) + '?' + query + '#' + quote(label, safe=''))
 
 
-def configs(rows, address, locations=None):
-    rows = list(rows)
-    if any(row.get('access', {}).get('profile') for row in rows):
-        from entrance_profiles import export_profiles
-        return export_profiles(rows, address, locations)
+def share_links(row, address, locations=None):
+    """Build node URIs without rendering a full client configuration."""
+    from entrance_profiles import modes
     from exit_location import label
-    from urllib.parse import quote
-    clash = {'mode': 'rule', 'allow-lan': False, 'log-level': 'error',
-             'proxies': [], 'proxy-groups': [], 'listeners': [], 'rules': []}
-    clients = {mode: {'log': {'level': 'error'}, 'inbounds': [], 'outbounds': [],
-                      'route': {'rules': []}} for mode in ('tcp', 'tuic')}
-    links, quick, standard, certificates = [], [], [], {}
-    rows = sorted((row for row in rows if row['enabled'] and row.get('access')), key=lambda row: row['port'])
-    if not rows:
-        raise AccessError('暂无启用的双模式中转。')
+    from urllib.parse import quote, urlencode
+
+    front = row.get('access')
+    if not row['enabled'] or not front:
+        return {}
+    allowed = modes(front)
+    port = row['port']
+    public = str(front['port'])
+    server = '[' + address + ']' if ':' in address else address
+    links = {}
+    if 'tcp' in allowed:
+        tag = quote(label(port, 'TCP', locations), safe='')
+        links['ss'] = ('ss://' + METHOD + ':' + quote(front['ss_password'], safe='') + '@'
+                       + server + ':' + public + '#' + tag)
+    if 'tuic' in allowed:
+        tag = label(port, 'TUIC', locations)
+        links['tuic'] = tuic_link(front, address, tag)
+        links['tuic_v2rayn'] = v2rayn_link(front, address, tag)
+    if 'hysteria2' in allowed:
+        tag = quote(label(port, 'HY2', locations), safe='')
+        query = urlencode({'sni': server_name(front), 'alpn': 'h3', 'insecure': '0'})
+        links['hy2'] = ('hysteria2://' + quote(front['hy2_password'], safe='') + '@'
+                        + server + ':' + public + '/?' + query + '#' + tag)
+    return links
+
+
+def validate_export_address(address):
     try:
         parsed = ipaddress.ip_address(address)
     except ValueError:
@@ -187,6 +203,23 @@ def configs(rows, address, locations=None):
     else:
         if parsed.version != 4 or parsed.is_unspecified or parsed.is_multicast or parsed.is_loopback:
             raise AccessError('请使用 VPS 公网 IPv4 或对应域名，入口目前监听 IPv4。')
+
+
+def configs(rows, address, locations=None):
+    rows = list(rows)
+    if any((row.get('access') or {}).get('profile') for row in rows):
+        from entrance_profiles import export_profiles
+        return export_profiles(rows, address, locations)
+    from exit_location import label
+    clash = {'mode': 'rule', 'allow-lan': False, 'log-level': 'error',
+             'proxies': [], 'proxy-groups': [], 'listeners': [], 'rules': []}
+    clients = {mode: {'log': {'level': 'error'}, 'inbounds': [], 'outbounds': [],
+                      'route': {'rules': []}} for mode in ('tcp', 'tuic')}
+    links, quick, standard, certificates = [], [], [], {}
+    rows = sorted((row for row in rows if row['enabled'] and row.get('access')), key=lambda row: row['port'])
+    if not rows:
+        raise AccessError('暂无启用的双模式中转。')
+    validate_export_address(address)
     groups = []
     for row in rows:
         front = validate(row['access'])
@@ -221,10 +254,8 @@ def configs(rows, address, locations=None):
             clients[mode]['inbounds'].append({'type': 'socks', 'tag': 'local-' + str(port), 'listen': '127.0.0.1',
                                             'listen_port': port, 'users': [{'username': row['client_user'], 'password': row['client_password']}]})
             clients[mode]['route']['rules'].append({'inbound': ['local-' + str(port)], 'action': 'route', 'outbound': tag})
-        server = '[' + address + ']' if ':' in address else address
-        link = 'ss://' + METHOD + ':' + quote(front['ss_password'], safe='') + '@' + server + ':' + str(public) + '#' + quote(tcp_tag)
-        internal = v2rayn_link(front, address, tuic_tag)
-        ordinary = tuic_link(front, address, tuic_tag)
+        shared = share_links(row, address, locations)
+        link, internal, ordinary = shared['ss'], shared['tuic_v2rayn'], shared['tuic']
         cert_name = 'TUIC-' + str(port) + '-证书.pem'
         certificates[cert_name] = front['certificate']
         standard.append(ordinary)

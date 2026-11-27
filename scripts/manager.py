@@ -31,6 +31,10 @@ class Error(Exception):
     pass
 
 
+class OperationBusy(Error):
+    """A web request can retry without queueing behind a relay operation."""
+
+
 def private_dir(path):
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(path, 0o700)
@@ -401,13 +405,22 @@ class Manager:
             private_dir(self.log)
 
     @contextlib.contextmanager
-    def lock(self):
+    def lock(self, wait=True, read_only=False):
         # No credentials in the lock. flock is per-process and crash-safe.
         import fcntl
         with open(self.root / 'manager.lock', 'a+b') as stream:
-            os.chmod(stream.name, 0o600)
-            fcntl.flock(stream, fcntl.LOCK_EX)
-            self.recover()
+            if not read_only:
+                os.chmod(stream.name, 0o600)
+            mode = fcntl.LOCK_SH if read_only else fcntl.LOCK_EX
+            try:
+                fcntl.flock(stream, mode if wait else mode | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise OperationBusy('正在更新中转，请稍后重试。') from None
+            if read_only:
+                if (self.root / 'pending.json').exists():
+                    raise OperationBusy('中转配置正在等待恢复，请在 VPS 终端检查 sb1。')
+            else:
+                self.recover()
             yield
 
     def pointer_path(self, port):
@@ -455,15 +468,11 @@ class Manager:
         return health(address, row['port'], row['client_user'], row['client_password'], self.ip_url)
 
     def exit_locations(self, rows, refresh=False, cached_only=False):
-        from concurrent.futures import ThreadPoolExecutor
-        from exit_location import country_for
-
-        pointers = self.pointers()
         candidates = [row for row in rows if row['enabled'] and row.get('access')]
 
         def detect(row):
             port = row['port']
-            path = self.revision(port, pointers[str(port)]) / 'exit-location.json'
+            path = self.revision(port, read_json(self.pointer_path(port))) / 'exit-location.json'
             if not refresh:
                 try:
                     cached = read_json(path)
@@ -474,6 +483,7 @@ class Manager:
                     pass
             if cached_only:
                 return port, ('', '')
+            from exit_location import country_for
             try:
                 ip, _ = self.verify(row)
             except (Error, OSError):
@@ -489,6 +499,7 @@ class Manager:
             return {}
         if cached_only:
             return dict(map(detect, candidates))
+        from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=min(4, len(candidates))) as pool:
             return dict(pool.map(detect, candidates))
 
@@ -846,10 +857,12 @@ def vps_address(row):
     return None
 
 
-def public_address(manager, detect=True):
+def public_address(manager, detect=True, fallback=None):
     path = manager.root / 'public-address.json'
     if path.exists():
         return host(read_json(path)['address'])
+    if fallback:
+        return host(fallback)
     address = vps_address({'bind': '0.0.0.0'})
     if not detect:
         if not address:

@@ -11,8 +11,8 @@ import threading
 import time
 from urllib.parse import parse_qs, quote, urlsplit
 
-from access import AccessError, configs
-from manager import Error, add_access, public_address, read_json, upstream_row, write_json
+from access import AccessError, share_links, validate_export_address
+from manager import Error, OperationBusy, add_access, public_address, read_json, upstream_row, write_json
 from tuic_qr import build, png
 import web_views as views
 
@@ -126,13 +126,13 @@ class AdminHandler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
-    def response(self, status, payload=b'', kind='text/html; charset=utf-8', headers=()):
+    def response(self, status, payload=b'', kind='text/html; charset=utf-8', headers=(), cache='no-store'):
         if isinstance(payload, str):
             payload = payload.encode('utf-8')
         self.send_response(status)
         self.send_header('Content-Type', kind)
         self.send_header('Content-Length', str(len(payload)))
-        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Cache-Control', cache)
         self.send_header('Referrer-Policy', 'same-origin')
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('X-Frame-Options', 'DENY')
@@ -203,7 +203,8 @@ class AdminHandler(BaseHTTPRequestHandler):
         asset = {'/style.css': ('style.css', 'text/css'), '/app.js': ('app.js', 'text/javascript'),
                  '/icon.png': ('icon.png', 'image/png')}.get(target.path)
         if asset:
-            return self.response(200, (ASSETS / asset[0]).read_bytes(), asset[1])
+            cache = 'public, max-age=86400, immutable' if target.query == 'v=' + views.VERSION else 'no-store'
+            return self.response(200, (ASSETS / asset[0]).read_bytes(), asset[1], cache=cache)
         try:
             if target.path == '/login':
                 destination = safe_destination(parse_qs(target.query, max_num_fields=4).get('next', [''])[0])
@@ -211,6 +212,8 @@ class AdminHandler(BaseHTTPRequestHandler):
             if not self.authenticated():
                 return self.redirect('/login?next=' + quote(safe_destination(target.path), safe='/'))
             self.page(target.path)
+        except OperationBusy as exc:
+            self.error(409, str(exc), True)
         except (AccessError, Error) as exc:
             self.error(400, str(exc), bool(self.session))
         except (OSError, KeyError, TypeError, ValueError):
@@ -220,38 +223,44 @@ class AdminHandler(BaseHTTPRequestHandler):
         manager = self.server.manager
         csrf = self.csrf
         match = NODE.fullmatch(path)
-        with manager.lock():
+        if path == '/add':
+            return self.response(200, views.edit(None, csrf))
+        if path != '/' and (not match or match.group(2) == 'detect'):
+            return self.error(404, '找不到此页面。', True)
+        with manager.lock(wait=False, read_only=True):
             if path == '/':
                 rows = manager.rows()
-                locations = manager.exit_locations(rows, cached_only=True)
-                return self.response(200, views.index(rows, locations, csrf))
-            if path == '/add':
-                return self.response(200, views.edit(None, csrf))
-            if match:
+                row, action = None, None
+            else:
                 port, action = int(match.group(1)), match.group(2)
                 if str(port) not in manager.pointers():
                     return self.error(404, '此中转已不存在。', True)
                 row = manager.row(port)
-                if action == 'edit':
-                    return self.response(200, views.edit(row, csrf))
-                locations = manager.exit_locations([row], cached_only=True)
-                if action in ('qr', 'qr.png'):
-                    address = public_address(manager, detect=False)
-                    if action == 'qr':
-                        if not views.has_qr(row):
-                            raise Error('此节点的 TUIC 二维码需要启用 TUIC 并配置公共 CA 证书。')
-                        return self.response(200, views.qr(row, locations, csrf))
-                    _, code = build(row, address, locations)
-                    return self.response(200, png(code), 'image/png')
-                if action is None:
-                    exports, warning = {}, ''
-                    if row.get('access') and row['enabled']:
-                        try:
-                            exports = configs([row], public_address(manager, detect=False), locations)
-                        except (AccessError, Error) as exc:
-                            warning = str(exc)
-                    return self.response(200, views.detail(row, locations, exports, warning, csrf))
-        self.error(404, '找不到此页面。', True)
+                rows = [row]
+            locations = manager.exit_locations(rows, cached_only=True) if action != 'edit' else {}
+            address, warning = None, ''
+            if action != 'edit' and any(node['enabled'] and node.get('access') for node in rows):
+                try:
+                    detected = public_address(manager, detect=False, fallback=self.server.domain)
+                    validate_export_address(detected)
+                    address = detected
+                except (AccessError, Error) as exc:
+                    warning = str(exc)
+        if path == '/':
+            return self.response(200, views.index(rows, locations, csrf, address, warning))
+        if action == 'edit':
+            return self.response(200, views.edit(row, csrf))
+        if action in ('qr', 'qr.png'):
+            if not views.has_qr(row):
+                raise Error('此节点的 TUIC 二维码需要启用 TUIC 并配置公共 CA 证书。')
+            if not address:
+                raise Error(warning)
+            if action == 'qr':
+                return self.response(200, views.qr(row, locations, csrf))
+            _, code = build(row, address, locations)
+            return self.response(200, png(code), 'image/png')
+        links = share_links(row, address, locations) if address else {}
+        self.response(200, views.detail(row, locations, links, warning, csrf))
 
     def do_POST(self):
         try:
@@ -267,6 +276,8 @@ class AdminHandler(BaseHTTPRequestHandler):
             if not token.isascii() or not compare_digest(token, self.csrf):
                 return self.error(403, '会话验证失败，请刷新页面。', True)
             self.update(target.path, fields)
+        except OperationBusy as exc:
+            self.error(409, str(exc), True)
         except (AccessError, Error) as exc:
             self.error(400, str(exc), bool(self.session))
         except (OSError, KeyError, TypeError, ValueError):
@@ -299,7 +310,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         action = match.group(2) if match else ''
         if path != '/add' and action not in ('edit', 'detect'):
             return self.error(404, '找不到此操作。', True)
-        with manager.lock():
+        with manager.lock(wait=False):
             port = int(match.group(1)) if match else None
             if port and str(port) not in manager.pointers():
                 return self.error(404, '此中转已不存在。', True)

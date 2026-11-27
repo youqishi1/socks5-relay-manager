@@ -2,7 +2,6 @@
 import copy
 import json
 import secrets
-from urllib.parse import quote, urlencode
 
 PROFILES = {'compat': 'SS + TUIC', 'tuic-only': '仅 TUIC', 'hysteria2-only': '仅 Hysteria 2（HTTP/3）'}
 
@@ -89,21 +88,19 @@ def export_profiles(rows, address, locations=None):
             rule = copy.deepcopy(source['route']['rules'][index])
             rule['outbound'] = outbound['tag']
             client['route']['rules'].append(rule)
-        legacy = access.configs([base_rows[index]], address, locations)
-        ss_link, internal = legacy['v2rayN-一键导入.txt'].splitlines()
-        common = legacy['TUIC-普通链接.txt'].strip()
+        shared = access.share_links(row, address, locations)
         details += ['中转 ' + str(row['port']) + '：' + PROFILES[profile(front)]]
         if 'tcp' in allowed:
+            ss_link = shared['ss']
             quick.append(ss_link)
             details += ['SS：', ss_link]
         if 'tuic' in allowed:
+            internal, common = shared['tuic_v2rayn'], shared['tuic']
             quick.append(internal)
             ordinary.append(common)
             details += ['TUIC：', common, '自签模式请使用保留证书的内部链接或完整 YAML/JSON，不能关闭证书验证。']
         if 'hysteria2' in allowed:
-            query = urlencode({'sni': access.server_name(front), 'alpn': 'h3', 'insecure': '0'})
-            link = ('hysteria2://' + quote(front['hy2_password'], safe='') + '@' + address + ':'
-                    + str(front['port']) + '/?' + query + '#' + quote(tag, safe=''))
+            link = shared['hy2']
             quick.append(link)
             hy2_links.append(link)
             details += ['Hysteria 2：', link]

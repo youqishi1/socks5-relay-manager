@@ -1,9 +1,12 @@
 """Small server-rendered views. All stored values are HTML-escaped."""
 from html import escape
+from pathlib import Path
 
-from access import system_trust
+from access import share_links, system_trust
 from entrance_profiles import PROFILES, profile
 from exit_location import label
+
+VERSION = (Path(__file__).resolve().parents[1] / 'VERSION').read_text(encoding='utf-8').strip()
 
 
 def page(title, body, csrf='', layout=''):
@@ -11,8 +14,8 @@ def page(title, body, csrf='', layout=''):
               '<button class="subtle" type="submit">退出后台</button></form>') if csrf else ''
     return f'''<!doctype html>
 <html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{escape(title)} · SOCKS5 中转管理</title><link rel="stylesheet" href="/style.css">
-<link rel="icon" type="image/png" href="/icon.png"><script defer src="/app.js"></script>
+<title>{escape(title)} · SOCKS5 中转管理</title><link rel="stylesheet" href="/style.css?v={VERSION}">
+<link rel="icon" type="image/png" href="/icon.png?v={VERSION}"><script defer src="/app.js?v={VERSION}"></script>
 <header><div class="bar"><a class="brand" href="/"><img src="/icon.png" width="36" height="36" alt="">
 <span>SOCKS5 中转管理</span></a>{logout}</div></header>
 <main class="{layout}">{body}</main></html>'''
@@ -37,7 +40,7 @@ def notice(status, message, csrf=''):
 
 def login(destination, error=''):
     return page('登录', f'''<section class="panel login"><h1>登录管理后台</h1>
-<p class="muted">输入你在 VPS 上设置的后台密码。</p>{alert(error)}
+<p class="muted">输入后台密码。需要设置或修改时，在 VPS 运行 <code>sb1 web-password</code>。</p>{alert(error)}
 <form action="/login" method="post">{hidden('next', destination)}
 <label for="password">后台密码</label>
 <input id="password" type="password" name="password" autocomplete="current-password" required autofocus maxlength="256">
@@ -54,12 +57,26 @@ def topology(row):
 
 
 def has_qr(row):
-    front = row.get('access', {})
+    front = row.get('access') or {}
     return row['enabled'] and system_trust(front) and profile(front) != 'hysteria2-only'
 
 
-def index(rows, locations, csrf):
+def copy_buttons(row, links):
+    if not links:
+        return ''
+    buttons = []
+    variants = [('ss', '复制 SS'), ('hy2', '复制 HY2')]
+    variants.append(('tuic', '复制 TUIC') if system_trust(row.get('access', {}))
+                    else ('tuic_v2rayn', '复制 TUIC · v2rayN'))
+    for key, caption in variants:
+        if key in links:
+            buttons.append(f'<button class="small secondary" type="button" data-share="{text(links[key])}">{caption}</button>')
+    return ''.join(buttons)
+
+
+def index(rows, locations, csrf, address=None, warning=''):
     entries = []
+    has_links = False
     for row in rows:
         port = row['port']
         front = row.get('access')
@@ -67,13 +84,15 @@ def index(rows, locations, csrf):
         status = '已启用' if row['enabled'] else '已停用'
         entry_port = str(front['port']) if front else '—'
         qr_link = f'<a class="button small secondary" href="/nodes/{port}/qr">二维码</a>' if has_qr(row) else ''
+        copies = copy_buttons(row, share_links(row, address, locations)) if address else ''
+        has_links = has_links or bool(copies)
         entries.append(f'''<tr>
 <td data-label="中转"><a class="entry" href="/nodes/{port}">{port}</a><small>{text(PROFILES[profile(front)]) if front else '原生 SOCKS5'}</small></td>
 <td data-label="入口端口" class="mono">{entry_port}</td>
 <td data-label="当前上游" class="mono">{upstream}</td>
 <td data-label="实测出口">{text(exit_text(row, locations))}</td>
 <td data-label="模式 / 状态">{topology(row)}<small class="state">{status}</small></td>
-<td class="actions" data-label="操作">{qr_link}<a class="button small secondary" href="/nodes/{port}/edit">修改</a></td>
+<td class="actions" data-label="操作"><div class="buttons row-actions">{copies}{qr_link}<a class="button small secondary" href="/nodes/{port}/edit">修改</a></div></td>
 </tr>''')
     table = ('''<div class="table"><table aria-label="中转列表"><thead><tr><th scope="col">中转</th>
 <th scope="col">入口端口</th><th scope="col">当前上游</th><th scope="col">实测出口</th>
@@ -82,8 +101,12 @@ def index(rows, locations, csrf):
              if rows else '<p class="empty panel">还没有中转。点击「添加中转」开始。</p>')
     search = ('<label class="sr-only" for="search">搜索中转</label><input id="search" class="search" '
               'type="search" placeholder="搜索中转编号、地址或地区" autocomplete="off">') if rows else ''
+    copy_all = '<button class="secondary" type="button" id="copy-list">复制当前列表链接</button>' if has_links else ''
+    copy_result = ('''<p id="copy-status" class="muted copy-status" role="status" hidden></p>
+<textarea id="copy-fallback" rows="3" readonly aria-label="待复制的节点链接" hidden></textarea>''' if has_links else '')
     return page('中转列表', f'''<div class="heading"><div><h1>中转列表</h1><p class="muted">{len(rows)} 条中转</p></div>
-<a class="button" href="/add"><span aria-hidden="true">＋</span> 添加中转</a></div>{search}{table}''', csrf)
+<div class="buttons">{copy_all}<a class="button" href="/add"><span aria-hidden="true">＋</span> 添加中转</a></div></div>
+{alert(warning)}{search}{copy_result}{table}''', csrf)
 
 
 def edit(row, csrf, error=''):
@@ -100,7 +123,7 @@ def edit(row, csrf, error=''):
     target = '/nodes/' + str(port) + '/edit' if row else '/add'
     back = '/nodes/' + str(port) if row else '/'
     return page(title, f'''<a class="back" href="{back}">← 返回</a><section class="panel">
-<h1>{title}</h1>{alert(error)}<form method="post" action="{target}" data-save>{hidden('csrf', csrf)}
+<h1>{title}</h1>{alert(error)}<form method="post" action="{target}" data-save="正在验证并保存…">{hidden('csrf', csrf)}
 <label for="upstream">完整 SOCKS5</label>
 <input id="upstream" name="upstream" type="password" autocomplete="new-password" maxlength="2048" {"required" if not row else ""} aria-describedby="upstream-help">
 <p id="upstream-help" class="muted field-note">{helper}</p>{mode}
@@ -108,7 +131,7 @@ def edit(row, csrf, error=''):
 </form></section>''', csrf, 'form-layout')
 
 
-def detail(row, locations, exports, warning, csrf):
+def detail(row, locations, shares, warning, csrf):
     port, front = row['port'], row.get('access')
     base = '/nodes/' + str(port)
     actions = f'<a class="button secondary" href="{base}/edit">修改</a>'
@@ -116,7 +139,7 @@ def detail(row, locations, exports, warning, csrf):
         actions += f'<a class="button" href="{base}/qr">查看 TUIC 二维码</a>'
     detect = ''
     if front and row['enabled']:
-        detect = (f'<form method="post" action="{base}/detect" data-save>{hidden("csrf", csrf)}'
+        detect = (f'<form method="post" action="{base}/detect" data-save="正在检测…">{hidden("csrf", csrf)}'
                   '<button class="secondary small" type="submit">检测出口</button></form>')
     upstream = text(row['upstream_host']) + ':' + text(row['upstream_port'])
     fields = f'''<dl><div><dt>当前上游</dt><dd class="mono">{upstream}</dd></div>
@@ -128,10 +151,10 @@ def detail(row, locations, exports, warning, csrf):
 <div><dt>账号</dt><dd>{text(row['client_user'])}</dd></div>
 <div><dt>密码</dt><dd class="mono">{text(row['client_password'])}</dd></div></dl></details>'''
     links = []
-    for index, (caption, name) in enumerate((('v2rayN 导入链接', 'v2rayN-一键导入.txt'),
-                                              ('TUIC 普通链接', 'TUIC-普通链接.txt'),
-                                              ('Hysteria 2 普通链接', 'HY2-普通链接.txt'))):
-        value = exports.get(name, '').strip()
+    quick = '\n'.join(shares[key] for key in ('ss', 'tuic_v2rayn', 'hy2') if key in shares)
+    for index, (caption, value) in enumerate((('v2rayN 导入链接', quick),
+                                              ('TUIC 普通链接', shares.get('tuic', '')),
+                                              ('Hysteria 2 普通链接', shares.get('hy2', '')))):
         if value:
             field = 'copy-' + str(index)
             links.append(f'''<div class="link-area"><div class="link-title"><label for="{field}">{caption}</label>

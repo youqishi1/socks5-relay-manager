@@ -75,8 +75,9 @@ td:first-child, th:first-child { padding-left: 20px; }
 td:last-child, th:last-child { padding-right: 20px; }
 .entry { font-size: 17px; font-weight: 750; }
 td small { display: block; margin-top: 3px; }
-.actions { white-space: nowrap; }
-.actions a + a { margin-left: 5px; }
+.row-actions { gap: 5px; }
+.copy-status { margin-bottom: 10px; }
+#copy-fallback { margin-bottom: 14px; }
 .empty { padding: 24px; color: var(--muted); }
 .state { font-size: 12px; }
 dl { margin: 18px 0 0; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px 24px; }
@@ -101,7 +102,7 @@ dd { margin: 4px 0 0; font-weight: 620; overflow-wrap: anywhere; }
   td, td:first-child, td:last-child { padding: 5px 14px; border: 0; }
   td::before { content: attr(data-label); color: var(--muted); display: inline-block; width: 7em; font-size: 13px; }
   td small { display: inline; margin-left: 8px; }
-  .actions { white-space: normal; }
+  .actions::before { display: block; width: auto; margin-bottom: 5px; }
   .detail-layout .heading { align-items: flex-start; flex-direction: column; }
 }
 @media (max-width: 430px) {
