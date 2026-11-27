@@ -2,6 +2,7 @@
 import contextlib
 import copy
 import http.client
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -30,6 +31,8 @@ class Fixture:
                    bind='127.0.0.1', sources=['127.0.0.1'])
         self.data = {row['port']: row}
         self.writes = self.probes = 0
+        self.outcomes = {row['port']: {'ip': '8.8.8.8', 'country': '美国', 'checked': 1}}
+        self.failed_ports = set()
         self.busy = False
         manager.write_json(root / 'public-address.json', {'address': '203.0.113.1'})
         self.write_password(PASSWORD)
@@ -63,10 +66,15 @@ class Fixture:
             self.data[port] = manager.validate(copy.deepcopy(row))
         self.writes += 1
 
-    def exit_locations(self, rows, refresh=False, cached_only=False):
+    def exit_location(self, row, refresh=False, cached_only=False, cooldown=0):
         assert refresh or cached_only
-        self.probes += int(refresh)
-        return {row['port']: ('8.8.8.8', '美国') for row in rows}
+        port = row['port']
+        if refresh:
+            assert cooldown == web_admin.EXIT_COOLDOWN
+            self.probes += 1
+            self.outcomes[port] = ({'ip': '', 'country': '', 'checked': 1} if port in self.failed_ports
+                                   else {'ip': '9.9.9.9', 'country': '美国', 'checked': 1})
+        return self.outcomes.get(port, {'ip': '', 'country': '', 'checked': 0})
 
 
 class WebTests(unittest.TestCase):
@@ -194,6 +202,32 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.call('/nodes/20001')[0], 409)
         self.assertEqual(self.call('/add')[0], 200)
         self.assertEqual(self.call('/add', {'csrf': self.server.csrf, 'upstream': UPSTREAM, 'mode': 'shared'})[0], 409)
+
+    def test_home_detects_one_at_a_time_and_refreshes_links(self):
+        accept = {'Accept': 'application/json'}
+        self.assertEqual(self.call('/nodes/20001/detect', {'csrf': 'invalid'}, accept)[0], 401)
+        self.login()
+        row = self.instance.row(20001)
+        self.instance.data[20002] = dict(row, port=20002, access=dict(row['access'], port=30002))
+        html = self.call('/')[2].decode()
+        self.assertIn('id="detect-missing"', html)
+        self.assertIn('data-detect="/nodes/20002/detect"', html)
+        self.assertIn('出口未检测', html)
+        self.assertEqual(self.instance.probes, 0)
+        form = {'csrf': self.server.csrf}
+        status, headers, body = self.call('/nodes/20002/detect', form, accept)
+        self.assertEqual(status, 200)
+        self.assertEqual(headers['Cache-Control'], 'no-store')
+        result = json.loads(body)
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['text'], '美国 · 9.9.9.9')
+        self.assertIn('9.9.9.9-20002-TUIC', result['links']['tuic'])
+        self.instance.failed_ports.add(20001)
+        result = json.loads(self.call('/nodes/20001/detect', form, accept)[2])
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['text'], '检测失败')
+        self.assertIn('检测失败', self.call('/')[2].decode())
+        self.assertEqual(self.instance.probes, 2)
 
 
 if __name__ == '__main__':

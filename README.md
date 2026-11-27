@@ -16,7 +16,7 @@ TCP 使用 Shadowsocks 2022，TUIC 使用 QUIC/TLS。两种入口共用公网端
 以 root 登录，普通用户先 `sudo -i`，再复制一整行：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.6.2/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.6.3/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
 ```
 
 固定版本安装包先校验 SHA-256，再执行安装。交互终端安装后自动打开菜单，以后 root 输入 `sb1`，普通用户输入 `sudo sb1`。原命令 `socks-menu` 继续可用。若 `/usr/local/bin/sb1` 已被其他程序占用，安装器拒绝覆盖。没有 curl 时先安装 `curl ca-certificates`。下载源码后在源码目录执行 `bash install.sh --local`。
@@ -86,6 +86,8 @@ socks5://账号:密码@IP:端口
 域名后台由 systemd 监听端口，有访问时才启动网页进程，闲置 15 分钟退出，后续访问会再次启动。首次启用时设置后台密码。以后设置、修改或忘记密码，可在 VPS 执行 `sb1 web-password`，输入两次至少 12 字符的新密码后重新登录。密码只保存加盐哈希。公网模式连续输错 5 次会暂停该来源 IP 登录 5 分钟，并限制全局密码校验频率。同时打开的网页登录以最近一次登录为准。
 
 网页首页可直接复制某条已启用节点的 SS、TUIC 或 HY2 链接，也可复制当前搜索筛选后的列表。公共 CA 的 TUIC 可复制普通链接，自签 TUIC 使用带证书的 v2rayN 导入链接。复制在浏览器内完成，不请求 VPS。网页读取遇到另一项配置操作时即时提示，保存节点仍会验证连接。
+
+网页首页每行有「检测」按钮，也可以点「检测未测出口」逐条检查当前列表中还没有成功结果的节点。检测结果和复制链接的出口备注在当前页面更新。进入页面只读缓存，批量检测不会并发。同一个节点 60 秒内重复点击会复用上次结果，出口 IP 相同且地区缓存仍有效时会复用地区。
 
 **SSH 本机访问**：也可在电脑的 PowerShell 或终端建立 SSH 隧道并打开后台：
 

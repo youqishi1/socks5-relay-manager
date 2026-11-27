@@ -78,6 +78,7 @@ td small { display: block; margin-top: 3px; }
 .row-actions { gap: 5px; }
 .copy-status { margin-bottom: 10px; }
 #copy-fallback { margin-bottom: 14px; }
+[data-detect] { margin: 4px 0 4px 6px; min-height: 28px; padding: 2px 9px; font-size: 12px; }
 .empty { padding: 24px; color: var(--muted); }
 .state { font-size: 12px; }
 dl { margin: 18px 0 0; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px 24px; }

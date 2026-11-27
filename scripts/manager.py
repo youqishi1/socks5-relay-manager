@@ -467,33 +467,51 @@ class Manager:
         address = '127.0.0.1' if row['bind'] == '0.0.0.0' else row['bind']
         return health(address, row['port'], row['client_user'], row['client_password'], self.ip_url)
 
+    def exit_location(self, row, refresh=False, cached_only=False, cooldown=0):
+        port = row['port']
+        path = self.revision(port, read_json(self.pointer_path(port))) / 'exit-location.json'
+        cached = {'ip': '', 'country': '', 'checked': 0}
+        age = float('inf')
+        country_at = 0
+        now = time.time()
+        try:
+            candidate = read_json(path)
+            if isinstance(candidate['ip'], str) and isinstance(candidate['country'], str):
+                age = now - candidate['checked']
+                cached = candidate
+                country_at = candidate.get('country_checked', candidate['checked'])
+                if type(country_at) not in (int, float):
+                    country_at = 0
+        except (Error, KeyError, TypeError):
+            pass
+        lifetime = cooldown if refresh else (86400 if cached['country'] else 300)
+        if cached_only or 0 <= age < lifetime:
+            return cached
+        from exit_location import country_for
+        try:
+            ip, _ = self.verify(row)
+        except (Error, OSError):
+            ip = ''
+        country = ''
+        if ip:
+            if cached['ip'] == ip and cached['country'] and 0 <= now - country_at < 86400:
+                country = cached['country']
+            else:
+                country = country_for(ip)
+                country_at = time.time()
+        result = {'ip': ip, 'country': country, 'checked': time.time(), 'country_checked': country_at if country else 0}
+        try:
+            write_json(path, result)
+        except OSError:
+            pass
+        return result
+
     def exit_locations(self, rows, refresh=False, cached_only=False):
         candidates = [row for row in rows if row['enabled'] and row.get('access')]
 
         def detect(row):
-            port = row['port']
-            path = self.revision(port, read_json(self.pointer_path(port))) / 'exit-location.json'
-            if not refresh:
-                try:
-                    cached = read_json(path)
-                    age = time.time() - cached['checked']
-                    if cached_only or 0 <= age < (86400 if cached['country'] else 300):
-                        return port, (cached['ip'], cached['country'])
-                except (Error, KeyError, TypeError, OSError):
-                    pass
-            if cached_only:
-                return port, ('', '')
-            from exit_location import country_for
-            try:
-                ip, _ = self.verify(row)
-            except (Error, OSError):
-                ip = ''
-            country = country_for(ip) if ip else ''
-            try:
-                write_json(path, {'ip': ip, 'country': country, 'checked': time.time()})
-            except OSError:
-                pass
-            return port, (ip, country)
+            result = self.exit_location(row, refresh=refresh, cached_only=cached_only)
+            return row['port'], (result['ip'], result['country'])
 
         if not candidates:
             return {}

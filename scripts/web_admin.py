@@ -4,6 +4,7 @@ import hashlib
 from hmac import compare_digest
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import json
 from pathlib import Path
 import re
 import secrets
@@ -25,6 +26,7 @@ PASSWORD_FILE = 'web-password.json'
 HOST = re.compile(r'(?:127\.0\.0\.1|localhost)(?::[0-9]{1,5})?\Z', re.ASCII)
 NODE = re.compile(r'/nodes/(2[0-9]{4})(?:/(edit|qr|qr\.png|detect))?\Z', re.ASCII)
 ASSETS = Path(__file__).resolve().parent.parent / 'web'
+EXIT_COOLDOWN = 60
 
 
 def password_digest(password, salt):
@@ -148,7 +150,14 @@ class AdminHandler(BaseHTTPRequestHandler):
         self.response(303, headers=(('Location', path), *headers))
 
     def error(self, status, message, authenticated=False):
+        if self.headers.get('Accept') == 'application/json':
+            return self.response(status, json.dumps({'error': message}, ensure_ascii=False), 'application/json; charset=utf-8')
         self.response(status, views.notice(status, message, self.csrf if authenticated else ''))
+
+    def link_address(self):
+        address = public_address(self.server.manager, detect=False, fallback=self.server.domain)
+        validate_export_address(address)
+        return address
 
     def request_target(self):
         host = self.headers.get('Host', '')
@@ -237,17 +246,18 @@ class AdminHandler(BaseHTTPRequestHandler):
                     return self.error(404, '此中转已不存在。', True)
                 row = manager.row(port)
                 rows = [row]
-            locations = manager.exit_locations(rows, cached_only=True) if action != 'edit' else {}
+            metadata = ({node['port']: manager.exit_location(node, cached_only=True)
+                         for node in rows if node['enabled']} if action != 'edit' else {})
+            locations = {port: (entry['ip'], entry['country']) for port, entry in metadata.items()}
+            checked = {port for port, entry in metadata.items() if entry['checked']}
             address, warning = None, ''
             if action != 'edit' and any(node['enabled'] and node.get('access') for node in rows):
                 try:
-                    detected = public_address(manager, detect=False, fallback=self.server.domain)
-                    validate_export_address(detected)
-                    address = detected
+                    address = self.link_address()
                 except (AccessError, Error) as exc:
                     warning = str(exc)
         if path == '/':
-            return self.response(200, views.index(rows, locations, csrf, address, warning))
+            return self.response(200, views.index(rows, locations, csrf, address, warning, checked))
         if action == 'edit':
             return self.response(200, views.edit(row, csrf))
         if action in ('qr', 'qr.png'):
@@ -260,7 +270,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             _, code = build(row, address, locations)
             return self.response(200, png(code), 'image/png')
         links = share_links(row, address, locations) if address else {}
-        self.response(200, views.detail(row, locations, links, warning, csrf))
+        self.response(200, views.detail(row, locations, links, warning, csrf, checked))
 
     def do_POST(self):
         try:
@@ -270,6 +280,8 @@ class AdminHandler(BaseHTTPRequestHandler):
             if target.path == '/login':
                 return self.sign_in()
             if not self.authenticated():
+                if self.headers.get('Accept') == 'application/json':
+                    return self.error(401, '登录已过期，请刷新页面后重新登录。')
                 return self.redirect('/login')
             fields = self.fields()
             token = fields.get('csrf', '')
@@ -316,9 +328,20 @@ class AdminHandler(BaseHTTPRequestHandler):
                 return self.error(404, '此中转已不存在。', True)
             previous = manager.row(port) if port else None
             if action == 'detect':
-                if not previous['enabled'] or not previous.get('access'):
-                    raise Error('请先启用加密中转。')
-                manager.exit_locations([previous], refresh=True)
+                if not previous['enabled']:
+                    raise Error('请先启用此中转。')
+                result = manager.exit_location(previous, refresh=True, cooldown=EXIT_COOLDOWN)
+                if self.headers.get('Accept') == 'application/json':
+                    locations = {port: (result['ip'], result['country'])}
+                    shares = {}
+                    if previous.get('access'):
+                        try:
+                            shares = share_links(previous, self.link_address(), locations)
+                        except (AccessError, Error):
+                            pass
+                    data = {'ok': bool(result['ip']), 'text': views.exit_text(previous, locations, {port}),
+                            'links': shares}
+                    return self.response(200, json.dumps(data, ensure_ascii=False), 'application/json; charset=utf-8')
                 return self.redirect('/nodes/' + str(port))
             try:
                 saved = save_node(manager, fields, previous)

@@ -47,9 +47,11 @@ def login(destination, error=''):
 <button class="wide" type="submit">登录</button></form></section>''', layout='narrow login-layout')
 
 
-def exit_text(row, locations):
+def exit_text(row, locations, checked=()):
     ip, country = locations.get(row['port'], ('', ''))
-    return ((country or '地区未知') + ' · ' + ip) if ip else '出口未检测'
+    if ip:
+        return (country or '地区未知') + ' · ' + ip
+    return '检测失败' if row['port'] in checked else '出口未检测'
 
 
 def topology(row):
@@ -70,11 +72,11 @@ def copy_buttons(row, links):
                     else ('tuic_v2rayn', '复制 TUIC · v2rayN'))
     for key, caption in variants:
         if key in links:
-            buttons.append(f'<button class="small secondary" type="button" data-share="{text(links[key])}">{caption}</button>')
+            buttons.append(f'<button class="small secondary" type="button" data-share-kind="{key}" data-share="{text(links[key])}">{caption}</button>')
     return ''.join(buttons)
 
 
-def index(rows, locations, csrf, address=None, warning=''):
+def index(rows, locations, csrf, address=None, warning='', checked=()):
     entries = []
     has_links = False
     for row in rows:
@@ -86,27 +88,33 @@ def index(rows, locations, csrf, address=None, warning=''):
         qr_link = f'<a class="button small secondary" href="/nodes/{port}/qr">二维码</a>' if has_qr(row) else ''
         copies = copy_buttons(row, share_links(row, address, locations)) if address else ''
         has_links = has_links or bool(copies)
-        entries.append(f'''<tr>
+        detect = (f'<button type="button" class="small secondary" data-detect="/nodes/{port}/detect">检测</button>'
+                  if row['enabled'] else '')
+        entries.append(f'''<tr data-exit-ready="{'yes' if locations.get(port, ('', ''))[0] else 'no'}">
 <td data-label="中转"><a class="entry" href="/nodes/{port}">{port}</a><small>{text(PROFILES[profile(front)]) if front else '原生 SOCKS5'}</small></td>
 <td data-label="入口端口" class="mono">{entry_port}</td>
 <td data-label="当前上游" class="mono">{upstream}</td>
-<td data-label="实测出口">{text(exit_text(row, locations))}</td>
+<td data-label="实测出口"><span data-exit-result>{text(exit_text(row, locations, checked))}</span>{detect}</td>
 <td data-label="模式 / 状态">{topology(row)}<small class="state">{status}</small></td>
 <td class="actions" data-label="操作"><div class="buttons row-actions">{copies}{qr_link}<a class="button small secondary" href="/nodes/{port}/edit">修改</a></div></td>
 </tr>''')
     table = ('''<div class="table"><table aria-label="中转列表"><thead><tr><th scope="col">中转</th>
 <th scope="col">入口端口</th><th scope="col">当前上游</th><th scope="col">实测出口</th>
-<th scope="col">模式 / 状态</th><th scope="col">操作</th></tr></thead><tbody id="relay-rows">'''
+<th scope="col">模式 / 状态</th><th scope="col">操作</th></tr></thead>'''
+             + f'<tbody id="relay-rows" data-csrf="{text(csrf)}">'
              + ''.join(entries) + '</tbody></table><p class="empty" id="filter-empty" hidden>没有匹配的中转。</p></div>'
              if rows else '<p class="empty panel">还没有中转。点击「添加中转」开始。</p>')
     search = ('<label class="sr-only" for="search">搜索中转</label><input id="search" class="search" '
               'type="search" placeholder="搜索中转编号、地址或地区" autocomplete="off">') if rows else ''
     copy_all = '<button class="secondary" type="button" id="copy-list">复制当前列表链接</button>' if has_links else ''
+    can_detect = any(row['enabled'] for row in rows)
+    detect_all = '<button class="secondary" type="button" id="detect-missing">检测未测出口</button>' if can_detect else ''
+    detect_result = '<p id="detect-status" class="muted copy-status" role="status" hidden></p>' if can_detect else ''
     copy_result = ('''<p id="copy-status" class="muted copy-status" role="status" hidden></p>
 <textarea id="copy-fallback" rows="3" readonly aria-label="待复制的节点链接" hidden></textarea>''' if has_links else '')
     return page('中转列表', f'''<div class="heading"><div><h1>中转列表</h1><p class="muted">{len(rows)} 条中转</p></div>
-<div class="buttons">{copy_all}<a class="button" href="/add"><span aria-hidden="true">＋</span> 添加中转</a></div></div>
-{alert(warning)}{search}{copy_result}{table}''', csrf)
+<div class="buttons">{detect_all}{copy_all}<a class="button" href="/add"><span aria-hidden="true">＋</span> 添加中转</a></div></div>
+{alert(warning)}{search}{detect_result}{copy_result}{table}''', csrf)
 
 
 def edit(row, csrf, error=''):
@@ -131,21 +139,21 @@ def edit(row, csrf, error=''):
 </form></section>''', csrf, 'form-layout')
 
 
-def detail(row, locations, shares, warning, csrf):
+def detail(row, locations, shares, warning, csrf, checked=()):
     port, front = row['port'], row.get('access')
     base = '/nodes/' + str(port)
     actions = f'<a class="button secondary" href="{base}/edit">修改</a>'
     if has_qr(row):
         actions += f'<a class="button" href="{base}/qr">查看 TUIC 二维码</a>'
     detect = ''
-    if front and row['enabled']:
+    if row['enabled']:
         detect = (f'<form method="post" action="{base}/detect" data-save="正在检测…">{hidden("csrf", csrf)}'
                   '<button class="secondary small" type="submit">检测出口</button></form>')
     upstream = text(row['upstream_host']) + ':' + text(row['upstream_port'])
     fields = f'''<dl><div><dt>当前上游</dt><dd class="mono">{upstream}</dd></div>
 <div><dt>入口 / 模式</dt><dd>{text(front['port']) if front else '—'} / {topology(row)}</dd></div>
 <div><dt>配置状态</dt><dd>{'已启用' if row['enabled'] else '已停用'}</dd></div>
-<div><dt>实测出口</dt><dd>{text(exit_text(row, locations))}</dd></div></dl>
+<div><dt>实测出口</dt><dd>{text(exit_text(row, locations, checked))}</dd></div></dl>
 <details class="credentials"><summary>查看本机 SOCKS5 账密</summary><dl>
 <div><dt>监听地址</dt><dd class="mono">{text(row['bind'])}:{port}</dd></div>
 <div><dt>账号</dt><dd>{text(row['client_user'])}</dd></div>
