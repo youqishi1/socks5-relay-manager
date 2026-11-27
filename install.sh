@@ -269,7 +269,7 @@ for name in ('install.sh', 'socks-menu.sh', 'uninstall.sh', 'VERSION', 'scripts/
 for script in (p / 'scripts').glob('*.py'):
     py_compile.compile(str(script), doraise=True)
 for name in ('scripts/shared_access.py', 'scripts/exit_location.py', 'systemd/socks-access-shared.service',
-             'scripts/web_admin.py', 'scripts/web_views.py', 'scripts/domain_web.py',
+             'scripts/web_admin.py', 'scripts/web_views.py', 'scripts/domain_web.py', 'scripts/web_activity.py',
              'web/style.css', 'web/app.js', 'web/icon.png'):
     if not (p / name).is_file() or (p / name).is_symlink():
         sys.exit('错误：共享入口、出口命名或网页后台文件不完整，或含有不安全链接。')

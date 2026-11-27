@@ -228,7 +228,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                 return self.response(200, views.login(destination))
             if not self.authenticated():
                 return self.redirect('/login?next=' + quote(safe_destination(target.path), safe='/'))
-            self.page(target.path)
+            self.page(target.path, activity=target.query == 'activity=1')
         except OperationBusy as exc:
             self.error(409, str(exc), True)
         except (AccessError, Error) as exc:
@@ -236,7 +236,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         except (OSError, KeyError, TypeError, ValueError):
             self.error(500, '暂时无法读取后台或节点配置，请从 VPS 终端检查状态。')
 
-    def page(self, path):
+    def page(self, path, activity=False):
         manager = self.server.manager
         csrf = self.csrf
         match = NODE.fullmatch(path)
@@ -265,7 +265,11 @@ class AdminHandler(BaseHTTPRequestHandler):
                 except (AccessError, Error) as exc:
                     warning = str(exc)
         if path == '/':
-            return self.response(200, views.index(rows, locations, csrf, address, warning, checked))
+            observed = None
+            if activity:
+                from web_activity import snapshot
+                observed = snapshot(rows, manager.log)
+            return self.response(200, views.index(rows, locations, csrf, address, warning, checked, observed))
         if action == 'edit':
             return self.response(200, views.edit(row, csrf))
         if action in ('qr', 'qr.png'):

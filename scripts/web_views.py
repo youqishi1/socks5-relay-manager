@@ -76,7 +76,14 @@ def copy_buttons(row, links):
     return ''.join(buttons)
 
 
-def index(rows, locations, csrf, address=None, warning='', checked=()):
+def activity_status(value):
+    count, recent = value['connections'], value['recent']
+    text_status = '连接状态未读到' if count is None else ('有连接（' + str(count) + '）' if count else '当前未见连接')
+    recent_status = '最近转发 ' + recent if recent else '近期日志未见转发'
+    return f'<small class="activity-now">{text(text_status)}</small><small>{text(recent_status)}</small>'
+
+
+def index(rows, locations, csrf, address=None, warning='', checked=(), activity=None):
     entries = []
     has_links = False
     for row in rows:
@@ -88,6 +95,7 @@ def index(rows, locations, csrf, address=None, warning='', checked=()):
         qr_link = f'<a class="button small secondary" href="/nodes/{port}/qr">二维码</a>' if has_qr(row) else ''
         copies = copy_buttons(row, share_links(row, address, locations)) if address else ''
         has_links = has_links or bool(copies)
+        observed = activity_status(activity[port]) if activity is not None and port in activity else ''
         detect = (f'<button type="button" class="small secondary" data-detect="/nodes/{port}/detect">检测</button>'
                   if row['enabled'] else '')
         note = row.get('note', '')
@@ -105,7 +113,7 @@ def index(rows, locations, csrf, address=None, warning='', checked=()):
 <td data-label="入口端口" class="mono">{entry_port}</td>
 <td data-label="当前上游" class="mono">{upstream}</td>
 <td data-label="实测出口"><span data-exit-result>{text(exit_text(row, locations, checked))}</span>{detect}</td>
-<td data-label="模式 / 状态">{topology(row)}<small class="state">{status}</small></td>
+<td data-label="模式 / 状态">{topology(row)}<small class="state">{status}</small>{observed}</td>
 <td class="actions" data-label="操作"><div class="buttons row-actions">{copies}{qr_link}<a class="button small secondary" href="/nodes/{port}/edit">修改</a></div></td>
 </tr>''')
     table = ('''<div class="table"><table aria-label="中转列表"><thead><tr><th scope="col">中转</th>
@@ -119,12 +127,20 @@ def index(rows, locations, csrf, address=None, warning='', checked=()):
     copy_all = '<button class="secondary" type="button" id="copy-list">复制当前列表链接</button>' if has_links else ''
     can_detect = any(row['enabled'] for row in rows)
     detect_all = '<button class="secondary" type="button" id="detect-missing">检测未测出口</button>' if can_detect else ''
+    usage = ''
+    usage_hint = ''
+    if rows:
+        usage = '<a class="button secondary" href="/?activity=1">查看使用情况</a>'
+        if activity is not None:
+            usage = ('<a class="button secondary" href="/?activity=1">刷新使用情况</a>'
+                     '<a class="button subtle" href="/">隐藏使用情况</a>')
+            usage_hint = '<p class="muted activity-hint">连接为本次快照。最近转发取自当前日志尾部，含检测流量，时间以 VPS 为准。</p>'
     detect_result = '<p id="detect-status" class="muted copy-status" role="status" hidden></p>' if can_detect else ''
     copy_result = ('''<p id="copy-status" class="muted copy-status" role="status" hidden></p>
 <textarea id="copy-fallback" rows="3" readonly aria-label="待复制的节点链接" hidden></textarea>''' if has_links else '')
     return page('中转列表', f'''<div class="heading"><div><h1>中转列表</h1><p class="muted">{len(rows)} 条中转</p></div>
-<div class="buttons">{detect_all}{copy_all}<a class="button" href="/add"><span aria-hidden="true">＋</span> 添加中转</a></div></div>
-{alert(warning)}{search}{detect_result}{copy_result}{table}''', csrf)
+<div class="buttons">{usage}{detect_all}{copy_all}<a class="button" href="/add"><span aria-hidden="true">＋</span> 添加中转</a></div></div>
+{alert(warning)}{search}{detect_result}{copy_result}{usage_hint}{table}''', csrf)
 
 
 def edit(row, csrf, error=''):

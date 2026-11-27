@@ -3,6 +3,7 @@ import copy
 import contextlib
 import http.client
 import io
+import socket
 import os
 from pathlib import Path
 import subprocess
@@ -110,6 +111,13 @@ try:
             manager.apply({row['port']: row})
             rows.append(row)
     print('PASS: real systemd startup and relay exit verification', flush=True)
+    from web_activity import snapshot as activity_snapshot
+    port = rows[1]['port']
+    with socket.create_connection(('127.0.0.1', port), timeout=3):
+        observed = activity_snapshot(rows, manager.log)
+        assert observed[port]['connections'] >= 1
+        assert observed[port]['recent']
+    print('PASS: usage snapshot finds a real relay connection and existing forwarded traffic', flush=True)
     for row in rows:
         subprocess.run(['systemctl', 'is-enabled', '--quiet', manager.backend.unit(row['port'])], check=True)
         assert manager.verify(row)[0] == '127.0.0.2'

@@ -3,6 +3,7 @@ import contextlib
 import copy
 import http.client
 import json
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -15,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import manager
 import test_certificates
 import web_admin
+import web_activity
 import web_views
 
 PASSWORD = 'local-fixture-password-42'
@@ -24,6 +26,8 @@ UPSTREAM = 'new-proxy.example:1080:fixture-account:fixture-proxy-secret'
 class Fixture:
     def __init__(self, root, row):
         self.root = root
+        self.log = root / 'logs'
+        self.log.mkdir()
         self.access_binary = root / 'sing-box'
         self.access_binary.touch()
         row = dict(row, upstream_host='initial-proxy.example', upstream_port=1080,
@@ -280,6 +284,34 @@ class WebTests(unittest.TestCase):
         self.assertEqual(instance.row(port, with_note=True)['note'], '巴西办公')
         instance.set_note(port, '')
         self.assertNotIn('note', instance.row(port, with_note=True))
+
+    def test_usage_reads_existing_sockets_and_log_only_when_requested(self):
+        self.login()
+        second = dict(self.instance.row(20001), port=20002, access=None)
+        self.instance.data[20002] = second
+        log = self.instance.log / 'relay-20001.log'
+        log.write_bytes(
+            b'2026-11-27 12:01:00 port=20001 error=00000 in=300 out=20 duration=1\n'
+            b'2026-11-27 12:02:00 port=20001 error=00000 in=0 out=0 duration=1\n'
+            b'2026-11-27 12:03:00 port=20001 error=00000 in=4 out=6 duration=300'
+        )
+        socket_output = '0 0 127.0.0.1:20001 127.0.0.1:48100\n0 0 [::1]:20001 [::1]:48101\n'
+        result = subprocess.CompletedProcess([], 0, stdout=socket_output, stderr='')
+        with patch.object(web_activity.subprocess, 'run', return_value=result) as command:
+            self.assertNotIn('当前未见连接', self.call('/')[2].decode())
+            command.assert_not_called()
+            status, _, body = self.call('/?activity=1')
+            self.assertEqual(status, 200)
+            self.assertIn('有连接（2）', body.decode())
+            self.assertIn('当前未见连接', body.decode())
+            self.assertIn('2026-11-27 12:01:00', body.decode())
+            self.assertNotIn('2026-11-27 12:03:00', body.decode())
+            command.assert_called_once()
+        self.assertEqual(self.instance.probes, 0)
+        self.assertIsNone(web_activity.last_forwarded(log, 20001, 10))
+        with patch.object(web_activity.subprocess, 'run', side_effect=OSError()):
+            unavailable = web_activity.snapshot(self.instance.rows(), self.instance.log)
+        self.assertIsNone(unavailable[20001]['connections'])
 
 
 if __name__ == '__main__':
