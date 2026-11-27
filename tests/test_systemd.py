@@ -3,9 +3,9 @@ import copy
 import contextlib
 import http.client
 import io
-import socket
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import time
@@ -111,8 +111,13 @@ try:
             manager.apply({row['port']: row})
             rows.append(row)
     print('PASS: real systemd startup and relay exit verification', flush=True)
-    from web_activity import snapshot as activity_snapshot
+    from web_activity import last_forwarded, snapshot as activity_snapshot
     port = rows[1]['port']
+    path = manager.log / f'relay-{port}.log'
+    # 3proxy flushes log records on its scheduled loop.
+    deadline = time.monotonic() + 5
+    while last_forwarded(path, port, 32768) is None and time.monotonic() < deadline:
+        time.sleep(0.1)
     with socket.create_connection(('127.0.0.1', port), timeout=3):
         observed = activity_snapshot(rows, manager.log)
         assert observed[port]['connections'] >= 1
