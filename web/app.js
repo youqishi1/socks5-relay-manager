@@ -38,23 +38,33 @@ function reportDetection(message) {
   detectStatus.hidden = false;
 }
 
+async function postJson(path, fields, failure) {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: {Accept: 'application/json'},
+    body: fields
+  }).catch(() => { throw new Error('连接后台失败，请稍后重试。'); });
+  const result = await response.json().catch(() => { throw new Error('后台响应异常，请刷新页面再试。'); });
+  if (!response.ok) throw new Error(result.error || failure);
+  return result;
+}
+
+function updateRowLinks(row, links) {
+  row.querySelectorAll('[data-share-kind]').forEach((copy) => {
+    const value = links[copy.dataset.shareKind];
+    if (value) copy.dataset.share = value;
+  });
+}
+
 async function checkExit(row) {
   const button = row.querySelector('[data-detect]');
   button.textContent = '检测中';
   try {
-    const response = await fetch(button.dataset.detect, {
-      method: 'POST',
-      headers: {Accept: 'application/json'},
-      body: new URLSearchParams({csrf: relayTable.dataset.csrf})
-    }).catch(() => { throw new Error('连接后台失败，请稍后重试。'); });
-    const result = await response.json().catch(() => { throw new Error('后台响应异常，请刷新页面再试。'); });
-    if (!response.ok) throw new Error(result.error || '出口检测未完成。');
+    const result = await postJson(button.dataset.detect,
+      new URLSearchParams({csrf: relayTable.dataset.csrf}), '出口检测未完成。');
     row.querySelector('[data-exit-result]').textContent = result.text;
     row.dataset.exitReady = result.ok ? 'yes' : 'no';
-    row.querySelectorAll('[data-share-kind]').forEach((copy) => {
-      const value = result.links[copy.dataset.shareKind];
-      if (value) copy.dataset.share = value;
-    });
+    updateRowLinks(row, result.links);
     return result.ok;
   } finally {
     button.textContent = '检测';
@@ -87,6 +97,35 @@ detectButtons.forEach((button) => {
   button.addEventListener('click', () => runDetection([button.closest('tr')]));
 });
 updateDetectControls();
+
+document.querySelectorAll('form[data-note]').forEach((form) => {
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const button = form.querySelector('button[type=submit]');
+    if (button.disabled) return;
+    const row = form.closest('tr');
+    const status = row.querySelector('[data-note-status]');
+    const editor = form.closest('details');
+    button.disabled = true;
+    status.hidden = true;
+    try {
+      const result = await postJson(form.action, new URLSearchParams(new FormData(form)), '备注保存未完成。');
+      const display = row.querySelector('[data-node-note]');
+      display.textContent = result.note;
+      display.hidden = !result.note;
+      form.elements.note.value = result.note;
+      updateRowLinks(row, result.links);
+      editor.open = false;
+      editor.querySelector('summary').focus();
+      status.textContent = result.note ? '备注已保存。' : '备注已清除。';
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      status.hidden = false;
+      button.disabled = false;
+    }
+  });
+});
 
 async function copyShare(value) {
   const status = document.querySelector('#copy-status');

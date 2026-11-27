@@ -79,6 +79,12 @@ td small { display: block; margin-top: 3px; }
 .copy-status { margin-bottom: 10px; }
 #copy-fallback { margin-bottom: 14px; }
 [data-detect] { margin: 4px 0 4px 6px; min-height: 28px; padding: 2px 9px; font-size: 12px; }
+.node-note { display: block; font-weight: 650; overflow-wrap: anywhere; }
+.note-editor { margin-top: 4px; }
+.note-editor summary { width: fit-content; cursor: pointer; color: var(--primary); font-size: 13px; }
+.note-editor form { display: flex; align-items: center; gap: 5px; margin-top: 6px; }
+.note-editor input { min-width: 0; max-width: 180px; min-height: 34px; padding: 5px 8px; font-size: 13px; }
+.note-status { overflow-wrap: anywhere; }
 .empty { padding: 24px; color: var(--muted); }
 .state { font-size: 12px; }
 dl { margin: 18px 0 0; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px 24px; }
@@ -104,6 +110,7 @@ dd { margin: 4px 0 0; font-weight: 620; overflow-wrap: anywhere; }
   td::before { content: attr(data-label); color: var(--muted); display: inline-block; width: 7em; font-size: 13px; }
   td small { display: inline; margin-left: 8px; }
   .actions::before { display: block; width: auto; margin-bottom: 5px; }
+  .note-editor, .node-note, .note-status { margin-left: 6em; }
   .detail-layout .heading { align-items: flex-start; flex-direction: column; }
 }
 @media (max-width: 430px) {

@@ -19,7 +19,7 @@ def build(row, address, locations=None):
     link = share_links(row, address, locations).get('tuic')
     if not link:
         raise AccessError('请先启用此节点的 TUIC 入口。')
-    if locations is None or row['port'] not in locations:
+    if not row.get('note') and (locations is None or row['port'] not in locations):
         link = link.split('#', 1)[0] + '#TUIC-' + str(row['port'])
     return link, QrCode.encode_text(link, QrCode.Ecc.MEDIUM)
 

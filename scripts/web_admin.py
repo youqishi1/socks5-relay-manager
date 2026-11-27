@@ -24,7 +24,7 @@ LOCKOUT = 300
 ATTEMPTS = 5
 PASSWORD_FILE = 'web-password.json'
 HOST = re.compile(r'(?:127\.0\.0\.1|localhost)(?::[0-9]{1,5})?\Z', re.ASCII)
-NODE = re.compile(r'/nodes/(2[0-9]{4})(?:/(edit|qr|qr\.png|detect))?\Z', re.ASCII)
+NODE = re.compile(r'/nodes/(2[0-9]{4})(?:/(edit|qr|qr\.png|detect|note))?\Z', re.ASCII)
 ASSETS = Path(__file__).resolve().parent.parent / 'web'
 EXIT_COOLDOWN = 60
 
@@ -159,6 +159,14 @@ class AdminHandler(BaseHTTPRequestHandler):
         validate_export_address(address)
         return address
 
+    def node_shares(self, row, locations):
+        if row['enabled'] and row.get('access'):
+            try:
+                return share_links(row, self.link_address(), locations)
+            except (AccessError, Error):
+                pass
+        return {}
+
     def request_target(self):
         host = self.headers.get('Host', '')
         origin = self.server.origin(host)
@@ -234,17 +242,17 @@ class AdminHandler(BaseHTTPRequestHandler):
         match = NODE.fullmatch(path)
         if path == '/add':
             return self.response(200, views.edit(None, csrf))
-        if path != '/' and (not match or match.group(2) == 'detect'):
+        if path != '/' and (not match or match.group(2) in ('detect', 'note')):
             return self.error(404, '找不到此页面。', True)
         with manager.lock(wait=False, read_only=True):
             if path == '/':
-                rows = manager.rows()
+                rows = manager.rows(with_note=True)
                 row, action = None, None
             else:
                 port, action = int(match.group(1)), match.group(2)
                 if str(port) not in manager.pointers():
                     return self.error(404, '此中转已不存在。', True)
-                row = manager.row(port)
+                row = manager.row(port, with_note=True)
                 rows = [row]
             metadata = ({node['port']: manager.exit_location(node, cached_only=True)
                          for node in rows if node['enabled']} if action != 'edit' else {})
@@ -320,27 +328,33 @@ class AdminHandler(BaseHTTPRequestHandler):
             return self.redirect('/login', ('Set-Cookie', self.cookie('')))
         match = NODE.fullmatch(path)
         action = match.group(2) if match else ''
-        if path != '/add' and action not in ('edit', 'detect'):
+        if path != '/add' and action not in ('edit', 'detect', 'note'):
             return self.error(404, '找不到此操作。', True)
         with manager.lock(wait=False):
             port = int(match.group(1)) if match else None
             if port and str(port) not in manager.pointers():
                 return self.error(404, '此中转已不存在。', True)
-            previous = manager.row(port) if port else None
+            if action == 'note':
+                if 'note' not in fields:
+                    raise Error('未收到备注，请重新提交。')
+                row = manager.set_note(port, fields['note'])
+                if self.headers.get('Accept') == 'application/json':
+                    locations = {}
+                    if row['enabled'] and row.get('access'):
+                        entry = manager.exit_location(row, cached_only=True)
+                        locations[port] = (entry['ip'], entry['country'])
+                    data = {'note': row.get('note', ''), 'links': self.node_shares(row, locations)}
+                    return self.response(200, json.dumps(data, ensure_ascii=False), 'application/json; charset=utf-8')
+                return self.redirect('/')
+            previous = manager.row(port, with_note=action == 'detect') if port else None
             if action == 'detect':
                 if not previous['enabled']:
                     raise Error('请先启用此中转。')
                 result = manager.exit_location(previous, refresh=True, cooldown=EXIT_COOLDOWN)
                 if self.headers.get('Accept') == 'application/json':
                     locations = {port: (result['ip'], result['country'])}
-                    shares = {}
-                    if previous.get('access'):
-                        try:
-                            shares = share_links(previous, self.link_address(), locations)
-                        except (AccessError, Error):
-                            pass
                     data = {'ok': bool(result['ip']), 'text': views.exit_text(previous, locations, {port}),
-                            'links': shares}
+                            'links': self.node_shares(previous, locations)}
                     return self.response(200, json.dumps(data, ensure_ascii=False), 'application/json; charset=utf-8')
                 return self.redirect('/nodes/' + str(port))
             try:

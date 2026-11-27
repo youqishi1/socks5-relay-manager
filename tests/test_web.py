@@ -8,7 +8,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
@@ -30,6 +30,7 @@ class Fixture:
                    upstream_user='initial-account', upstream_password='initial-fixture-secret',
                    bind='127.0.0.1', sources=['127.0.0.1'])
         self.data = {row['port']: row}
+        self.notes = {}
         self.writes = self.probes = 0
         self.outcomes = {row['port']: {'ip': '8.8.8.8', 'country': '美国', 'checked': 1}}
         self.failed_ports = set()
@@ -49,11 +50,18 @@ class Fixture:
             raise manager.OperationBusy('正在更新中转，请稍后重试。')
         yield
 
-    def rows(self):
-        return [copy.deepcopy(row) for row in self.data.values()]
+    def rows(self, with_note=False):
+        return [self.row(port, with_note) for port in self.data]
 
-    def row(self, port):
-        return copy.deepcopy(self.data[port])
+    def row(self, port, with_note=False):
+        row = copy.deepcopy(self.data[port])
+        if with_note and self.notes.get(port):
+            row['note'] = self.notes[port]
+        return row
+
+    def set_note(self, port, note):
+        self.notes[port] = note.strip()
+        return self.row(port, with_note=True)
 
     def pointers(self):
         return {str(port): {} for port in self.data}
@@ -211,6 +219,7 @@ class WebTests(unittest.TestCase):
         self.login()
         row = self.instance.row(20001)
         self.instance.data[20002] = dict(row, port=20002, access=dict(row['access'], port=30002))
+        self.instance.notes[20002] = '办公'
         html = self.call('/')[2].decode()
         self.assertIn('id="detect-missing"', html)
         self.assertIn('data-detect="/nodes/20002/detect"', html)
@@ -224,12 +233,53 @@ class WebTests(unittest.TestCase):
         self.assertTrue(result['ok'])
         self.assertEqual(result['text'], '美国 · 9.9.9.9')
         self.assertIn('9.9.9.9-20002-TUIC', result['links']['tuic'])
+        self.assertIn('%E5%8A%9E%E5%85%AC-', result['links']['tuic'])
         self.instance.failed_ports.add(20001)
         result = json.loads(self.call('/nodes/20001/detect', form, accept)[2])
         self.assertFalse(result['ok'])
         self.assertEqual(result['text'], '检测失败')
         self.assertIn('检测失败', self.call('/')[2].decode())
         self.assertEqual(self.instance.probes, 2)
+
+    def test_home_renames_without_probing_or_changing_the_node(self):
+        self.login()
+        form = {'csrf': self.server.csrf, 'note': ' 办公 <A> '}
+        target = '/nodes/20001/note'
+        accept = {'Accept': 'application/json'}
+        self.assertEqual(self.call(target, dict(form, csrf='bad'), accept)[0], 403)
+        original = self.instance.row(20001)
+        status, _, body = self.call(target, form, accept)
+        self.assertEqual(status, 200)
+        result = json.loads(body)
+        self.assertEqual(result['note'], '办公 <A>')
+        self.assertIn('%3CA%3E-', result['links']['tuic'])
+        self.assertIn('8.8.8.8-20001-TUIC', result['links']['tuic'])
+        self.assertIn('办公 &lt;A&gt;', self.call('/')[2].decode())
+        self.assertIn('办公 &lt;A&gt;-美国-', self.call('/nodes/20001/qr')[2].decode())
+        self.assertEqual(self.call(target, dict(form, note=''), accept)[0], 200)
+        self.assertNotIn('办公', self.call('/')[2].decode())
+        self.assertEqual(self.instance.row(20001), original)
+        self.assertEqual((self.instance.probes, self.instance.writes), (0, 0))
+
+    def test_note_is_persisted_without_replacing_the_service_revision(self):
+        root = self.instance.root / 'manager'
+        backend = Mock()
+        instance = manager.Manager(root, root / 'logs', backend=backend)
+        row = dict(self.instance.row(20001), enabled=False)
+        port = row['port']
+        pointer = {'revision': 'a' * 32}
+        manager.write_json(instance.revision(port, pointer) / 'relay.json', row)
+        instance.set_pointer(port, pointer)
+        with self.assertRaises(manager.Error):
+            instance.set_note(port, '甲' * 33)
+        instance.set_note(port, '巴西办公')
+        self.assertEqual(instance.pointers()[str(port)]['revision'], pointer['revision'])
+        self.assertEqual(instance.row(port), row)
+        backend.apply.assert_not_called()
+        instance.apply({port: row}, verify=False)
+        self.assertEqual(instance.row(port, with_note=True)['note'], '巴西办公')
+        instance.set_note(port, '')
+        self.assertNotIn('note', instance.row(port, with_note=True))
 
 
 if __name__ == '__main__':

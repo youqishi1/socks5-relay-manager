@@ -173,19 +173,20 @@ def share_links(row, address, locations=None):
         return {}
     allowed = modes(front)
     port = row['port']
+    note = row.get('note', '')
     public = str(front['port'])
     server = '[' + address + ']' if ':' in address else address
     links = {}
     if 'tcp' in allowed:
-        tag = quote(label(port, 'TCP', locations), safe='')
+        tag = quote(label(port, 'TCP', locations, note), safe='')
         links['ss'] = ('ss://' + METHOD + ':' + quote(front['ss_password'], safe='') + '@'
                        + server + ':' + public + '#' + tag)
     if 'tuic' in allowed:
-        tag = label(port, 'TUIC', locations)
+        tag = label(port, 'TUIC', locations, note)
         links['tuic'] = tuic_link(front, address, tag)
         links['tuic_v2rayn'] = v2rayn_link(front, address, tag)
     if 'hysteria2' in allowed:
-        tag = quote(label(port, 'HY2', locations), safe='')
+        tag = quote(label(port, 'HY2', locations, note), safe='')
         query = urlencode({'sni': server_name(front), 'alpn': 'h3', 'insecure': '0'})
         links['hy2'] = ('hysteria2://' + quote(front['hy2_password'], safe='') + '@'
                         + server + ':' + public + '/?' + query + '#' + tag)
@@ -224,7 +225,8 @@ def configs(rows, address, locations=None):
     for row in rows:
         front = validate(row['access'])
         port, public = row['port'], front['port']
-        tcp_tag, tuic_tag, selector = (label(port, suffix, locations) for suffix in ('TCP', 'TUIC', '模式'))
+        tcp_tag, tuic_tag, selector = (label(port, suffix, locations, row.get('note', ''))
+                                       for suffix in ('TCP', 'TUIC', '模式'))
         groups.append(selector)
         clash['proxies'] += [
             {'name': tcp_tag, 'type': 'ss', 'server': address, 'port': public, 'cipher': METHOD,

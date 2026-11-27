@@ -435,15 +435,34 @@ class Manager:
             raise Error('配置版本标识无效。')
         return self.root / 'ports' / str(int(port)) / 'revisions' / revision
 
-    def row(self, port, pointer=None):
+    def row(self, port, pointer=None, with_note=False):
         pointer = pointer or read_json(self.pointer_path(port))
         row = validate(read_json(self.revision(port, pointer) / 'relay.json'))
         if row['port'] != int(port):
             raise Error('配置中的端口与服务编号不一致。')
+        if with_note and pointer.get('note'):
+            row['note'] = pointer['note']
         return row
 
-    def rows(self):
-        return [self.row(p, pointer) for p, pointer in sorted(self.pointers().items(), key=lambda x: int(x[0]))]
+    def rows(self, with_note=False):
+        return [self.row(p, pointer, with_note=with_note)
+                for p, pointer in sorted(self.pointers().items(), key=lambda x: int(x[0]))]
+
+    def set_note(self, port, value):
+        note = value.strip()
+        if len(note) > 32 or (note and not note.isprintable()):
+            raise Error('备注最多 32 个字符，且请使用单行文字。')
+        pointer = read_json(self.pointer_path(port))
+        row = self.row(port, pointer)
+        if note != pointer.get('note', ''):
+            if note:
+                pointer['note'] = note
+            else:
+                pointer.pop('note', None)
+            self.set_pointer(port, pointer)
+        if note:
+            row['note'] = note
+        return row
 
     def allocate(self):
         existing = self.pointers()
@@ -638,6 +657,9 @@ class Manager:
                 row['resolved_ip'] = resolve(row['upstream_host'])
                 check_config(row, self.binary)
             pointer = {'revision': uuid.uuid4().hex}
+            note = old.get(str(port), {}).get('note')
+            if note:
+                pointer['note'] = note
             directory = self.revision(port, pointer)
             write_json(directory / 'relay.json', row)
             if row['enabled']:
@@ -905,7 +927,7 @@ def public_address(manager, detect=True, fallback=None):
 
 def export_dual(manager, refresh=False):
     from access import AccessError, configs
-    rows = manager.rows()
+    rows = manager.rows(with_note=True)
     address = public_address(manager)
     locations = manager.exit_locations(rows, refresh=refresh)
     try:
@@ -1037,7 +1059,7 @@ def show_connection(row, manager=None, locations=None):
 
 
 def show_all_connections(manager):
-    rows = manager.rows()
+    rows = manager.rows(with_note=True)
     if not rows:
         print('暂无中转。')
         return

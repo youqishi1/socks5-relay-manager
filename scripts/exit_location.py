@@ -30,10 +30,10 @@ def country_for(ip):
     return ''
 
 
-def label(port, protocol, locations):
+def label(port, protocol, locations, note=''):
     if locations is None or port not in locations:
         prefix = '出口'
     else:
         ip, country = locations[port]
         prefix = (country or '地区未知') + '-' + ip if ip else '出口未验证'
-    return f'{prefix}-{port}-{protocol}'
+    return (note + '-' if note else '') + f'{prefix}-{port}-{protocol}'

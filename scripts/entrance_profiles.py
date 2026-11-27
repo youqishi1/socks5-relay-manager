@@ -70,7 +70,7 @@ def export_profiles(rows, address, locations=None):
         group = clash['proxy-groups'][index]
         nodes = {'tcp': tcp_node, 'tuic': udp_node}
         if 'hysteria2' in allowed:
-            tag = label(row['port'], 'HY2', locations)
+            tag = label(row['port'], 'HY2', locations, row.get('note', ''))
             nodes['hysteria2'] = dict(name=tag, type='hysteria2', server=address, port=front['port'],
                                      password=front['hy2_password'], sni=access.server_name(front),
                                      alpn=['h3'], **{'skip-cert-verify': False})
