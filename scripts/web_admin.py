@@ -139,7 +139,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('X-Frame-Options', 'DENY')
         self.send_header('Content-Security-Policy',
-                         "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; "
+                         "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; connect-src 'self'; "
                          "frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
         for name, value in headers:
             self.send_header(name, value)

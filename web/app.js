@@ -46,8 +46,8 @@ async function checkExit(row) {
       method: 'POST',
       headers: {Accept: 'application/json'},
       body: new URLSearchParams({csrf: relayTable.dataset.csrf})
-    });
-    const result = await response.json();
+    }).catch(() => { throw new Error('连接后台失败，请稍后重试。'); });
+    const result = await response.json().catch(() => { throw new Error('后台响应异常，请刷新页面再试。'); });
     if (!response.ok) throw new Error(result.error || '出口检测未完成。');
     row.querySelector('[data-exit-result]').textContent = result.text;
     row.dataset.exitReady = result.ok ? 'yes' : 'no';
