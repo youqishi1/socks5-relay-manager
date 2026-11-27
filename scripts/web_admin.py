@@ -1,0 +1,320 @@
+"""Temporary, loopback-only administration over an existing SSH connection."""
+import getpass
+import hashlib
+from hmac import compare_digest
+from http.cookies import CookieError, SimpleCookie
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+import re
+import secrets
+import time
+from urllib.parse import parse_qs, quote, urlsplit
+
+from access import AccessError, configs
+from manager import Error, add_access, public_address, read_json, upstream_row, write_json
+from tuic_qr import build, png
+import web_views as views
+
+
+PORT = 18765
+IDLE = 900
+LOCKOUT = 300
+ATTEMPTS = 5
+PASSWORD_FILE = 'web-password.json'
+HOST = re.compile(r'(?:127\.0\.0\.1|localhost)(?::[0-9]{1,5})?\Z', re.ASCII)
+NODE = re.compile(r'/nodes/(2[0-9]{4})(?:/(edit|qr|qr\.png|detect))?\Z', re.ASCII)
+ASSETS = Path(__file__).resolve().parent.parent / 'web'
+
+
+def password_digest(password, salt):
+    return hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, 600000)
+
+
+def set_password(manager):
+    password = getpass.getpass('设置网页后台密码（至少 12 字符，输入隐藏）：')
+    if len(password) < 12 or len(password.encode('utf-8')) > 256:
+        raise Error('后台密码至少 12 个字符，且最多 256 字节。')
+    if password != getpass.getpass('再次输入后台密码：'):
+        raise Error('两次密码不一致。')
+    salt = secrets.token_bytes(16)
+    with manager.lock():
+        write_json(manager.root / PASSWORD_FILE, {'salt': salt.hex(), 'digest': password_digest(password, salt).hex()})
+    print('网页后台密码已保存。')
+
+
+def safe_destination(value):
+    match = NODE.fullmatch(value)
+    if value == '/add' or match and match.group(2) in (None, 'edit', 'qr'):
+        return value
+    return '/'
+
+
+class AdminServer(HTTPServer):
+    def __init__(self, manager, port=PORT):
+        self.manager = manager
+        self.credentials = manager.root / PASSWORD_FILE
+        self.password_version = None
+        self.session = self.csrf = ''
+        self.failures = 0
+        self.blocked_until = self.failed_at = 0
+        self.last_used = time.monotonic()
+        super().__init__(('127.0.0.1', port), AdminHandler)
+
+    def refresh_password_version(self):
+        stat = self.credentials.stat()
+        version = (stat.st_ino, stat.st_mtime_ns)
+        if version != self.password_version:
+            self.session = self.csrf = ''
+            self.failures = self.blocked_until = self.failed_at = 0
+            self.password_version = version
+
+    def recent_lockout(self):
+        return max(0, int(self.blocked_until - time.monotonic() + .999))
+
+    def login(self, password):
+        now = time.monotonic()
+        if now - self.failed_at >= LOCKOUT:
+            self.failures = 0
+        record = read_json(self.credentials)
+        salt, digest = bytes.fromhex(record['salt']), bytes.fromhex(record['digest'])
+        if 0 < len(password.encode('utf-8')) <= 256 and compare_digest(password_digest(password, salt), digest):
+            self.session, self.csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+            self.last_used = now
+            self.failures = 0
+            return True
+        self.failed_at = now
+        self.failures += 1
+        if self.failures >= ATTEMPTS:
+            self.blocked_until = now + LOCKOUT
+            self.failures = 0
+        return False
+
+
+class AdminHandler(BaseHTTPRequestHandler):
+    server_version = 'RelayAdmin'
+    sys_version = ''
+
+    def setup(self):
+        self.request.settimeout(5)
+        super().setup()
+
+    def log_message(self, *_):
+        pass
+
+    def response(self, status, payload=b'', kind='text/html; charset=utf-8', headers=()):
+        if isinstance(payload, str):
+            payload = payload.encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type', kind)
+        self.send_header('Content-Length', str(len(payload)))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Referrer-Policy', 'same-origin')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('X-Frame-Options', 'DENY')
+        self.send_header('Content-Security-Policy',
+                         "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; "
+                         "frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        for name, value in headers:
+            self.send_header(name, value)
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def redirect(self, path, *headers):
+        self.response(303, headers=(('Location', path), *headers))
+
+    def error(self, status, message, authenticated=False):
+        self.response(status, views.notice(status, message, self.server.csrf if authenticated else ''))
+
+    def request_target(self):
+        host = self.headers.get('Host', '')
+        if not HOST.fullmatch(host) or self.headers.get('Sec-Fetch-Site') == 'cross-site':
+            raise Error('仅支持通过 SSH 隧道打开本机后台链接。')
+        target = urlsplit(self.path)
+        if target.scheme or target.netloc or not target.path.startswith('/'):
+            raise Error('请求地址无效。')
+        return host, target
+
+    def authenticated(self):
+        if not self.server.session or time.monotonic() - self.server.last_used >= IDLE:
+            return False
+        cookies = SimpleCookie()
+        try:
+            cookies.load(self.headers.get('Cookie', ''))
+        except CookieError:
+            return False
+        token = cookies.get('relay_admin')
+        if token and token.value.isascii() and compare_digest(token.value, self.server.session):
+            self.server.last_used = time.monotonic()
+            return True
+        return False
+
+    def fields(self):
+        if self.headers.get('Transfer-Encoding') or self.headers.get_content_type() != 'application/x-www-form-urlencoded':
+            raise Error('表单格式无效。')
+        length = self.headers.get('Content-Length', '')
+        if not re.fullmatch(r'[0-9]{1,4}', length) or not 0 < int(length) <= 8192:
+            raise Error('表单长度无效。')
+        data = self.rfile.read(int(length))
+        if len(data) != int(length):
+            raise Error('表单接收不完整。')
+        try:
+            fields = parse_qs(data.decode('utf-8'), keep_blank_values=True, max_num_fields=8, errors='strict')
+        except ValueError:
+            raise Error('表单格式无效。') from None
+        if any(len(values) != 1 for values in fields.values()):
+            raise Error('表单字段重复。')
+        return {key: values[0] for key, values in fields.items()}
+
+    def do_GET(self):
+        try:
+            _, target = self.request_target()
+        except (Error, ValueError):
+            return self.error(403, '仅支持通过 SSH 隧道打开本机后台地址。')
+        asset = {'/style.css': ('style.css', 'text/css'), '/app.js': ('app.js', 'text/javascript'),
+                 '/icon.png': ('icon.png', 'image/png')}.get(target.path)
+        if asset:
+            return self.response(200, (ASSETS / asset[0]).read_bytes(), asset[1])
+        try:
+            self.server.refresh_password_version()
+            if target.path == '/login':
+                destination = safe_destination(parse_qs(target.query, max_num_fields=4).get('next', [''])[0])
+                return self.response(200, views.login(destination))
+            if not self.authenticated():
+                return self.redirect('/login?next=' + quote(safe_destination(target.path), safe='/'))
+            self.page(target.path)
+        except (AccessError, Error) as exc:
+            self.error(400, str(exc), bool(self.server.session))
+        except (OSError, KeyError, TypeError, ValueError):
+            self.error(500, '暂时无法读取后台或节点配置，请从 VPS 终端检查状态。')
+
+    def page(self, path):
+        manager = self.server.manager
+        csrf = self.server.csrf
+        match = NODE.fullmatch(path)
+        with manager.lock():
+            if path == '/':
+                rows = manager.rows()
+                locations = manager.exit_locations(rows, cached_only=True)
+                return self.response(200, views.index(rows, locations, csrf))
+            if path == '/add':
+                return self.response(200, views.edit(None, csrf))
+            if match:
+                port, action = int(match.group(1)), match.group(2)
+                if str(port) not in manager.pointers():
+                    return self.error(404, '此中转已不存在。', True)
+                row = manager.row(port)
+                if action == 'edit':
+                    return self.response(200, views.edit(row, csrf))
+                locations = manager.exit_locations([row], cached_only=True)
+                if action in ('qr', 'qr.png'):
+                    address = public_address(manager, detect=False)
+                    if action == 'qr':
+                        if not views.has_qr(row):
+                            raise Error('此节点的 TUIC 二维码需要启用 TUIC 并配置公共 CA 证书。')
+                        return self.response(200, views.qr(row, locations, csrf))
+                    _, code = build(row, address, locations)
+                    return self.response(200, png(code), 'image/png')
+                if action is None:
+                    exports, warning = {}, ''
+                    if row.get('access') and row['enabled']:
+                        try:
+                            exports = configs([row], public_address(manager, detect=False), locations)
+                        except (AccessError, Error) as exc:
+                            warning = str(exc)
+                    return self.response(200, views.detail(row, locations, exports, warning, csrf))
+        self.error(404, '找不到此页面。', True)
+
+    def do_POST(self):
+        try:
+            host, target = self.request_target()
+            if self.headers.get('Origin') != 'http://' + host:
+                return self.error(403, '请求来源无效，请从后台页面重新操作。')
+            self.server.refresh_password_version()
+            if target.path == '/login':
+                return self.sign_in()
+            if not self.authenticated():
+                return self.redirect('/login')
+            fields = self.fields()
+            token = fields.get('csrf', '')
+            if not token.isascii() or not compare_digest(token, self.server.csrf):
+                return self.error(403, '会话验证失败，请刷新页面。', True)
+            self.update(target.path, fields)
+        except (AccessError, Error) as exc:
+            self.error(400, str(exc), bool(self.server.session))
+        except (OSError, KeyError, TypeError, ValueError):
+            self.error(500, '操作未完成，请重新打开节点详情核对结果。')
+
+    def sign_in(self):
+        fields = self.fields()
+        destination = safe_destination(fields.get('next', ''))
+        if not self.server.recent_lockout() and self.server.login(fields.get('password', '')):
+            return self.redirect(destination, ('Set-Cookie',
+                'relay_admin=' + self.server.session + '; Path=/; HttpOnly; SameSite=Strict'))
+        wait = self.server.recent_lockout()
+        if wait:
+            return self.response(429, views.login(destination, '尝试次数过多，请在 ' + str(wait) + ' 秒后重试。'),
+                                 headers=(('Retry-After', str(wait)),))
+        self.response(401, views.login(destination, '后台密码不正确。'))
+
+    def update(self, path, fields):
+        manager = self.server.manager
+        if path == '/logout':
+            self.server.session = self.server.csrf = ''
+            return self.redirect('/login', ('Set-Cookie', 'relay_admin=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict'))
+        match = NODE.fullmatch(path)
+        action = match.group(2) if match else ''
+        if path != '/add' and action not in ('edit', 'detect'):
+            return self.error(404, '找不到此操作。', True)
+        with manager.lock():
+            port = int(match.group(1)) if match else None
+            if port and str(port) not in manager.pointers():
+                return self.error(404, '此中转已不存在。', True)
+            previous = manager.row(port) if port else None
+            if action == 'detect':
+                if not previous['enabled'] or not previous.get('access'):
+                    raise Error('请先启用加密中转。')
+                manager.exit_locations([previous], refresh=True)
+                return self.redirect('/nodes/' + str(port))
+            try:
+                saved = save_node(manager, fields, previous)
+            except (Error, AccessError) as exc:
+                return self.response(400, views.edit(previous, self.server.csrf, str(exc)))
+        self.redirect('/nodes/' + str(saved['port']))
+
+
+def save_node(manager, fields, previous=None):
+    line, mode = fields.get('upstream', '').strip(), fields.get('mode', '')
+    has_access = previous is None or bool(previous.get('access'))
+    if has_access and mode not in ('shared', 'independent'):
+        raise Error('请选择有效的运行方式。')
+    if not line and previous is None:
+        raise Error('请粘贴完整 SOCKS5 信息。')
+    row = upstream_row(manager, line, previous) if line else previous.copy()
+    if previous is None:
+        add_access(manager, row, mode == 'shared')
+    else:
+        row['enabled'] = previous['enabled']
+        if has_access and mode == 'shared':
+            row['shared'] = True
+        else:
+            row.pop('shared', None)
+    if row != previous:
+        manager.apply({row['port']: row})
+    return row
+
+
+def serve(manager, path='/'):
+    if not (manager.root / PASSWORD_FILE).exists():
+        set_password(manager)
+    try:
+        with AdminServer(manager) as server:
+            print(f'网页后台仅通过 SSH 隧道访问。打开 http://127.0.0.1:{PORT}{safe_destination(path)}')
+            print(f'如需另开 SSH 隧道：ssh -o ExitOnForwardFailure=yes -N -L 127.0.0.1:{PORT}:127.0.0.1:{PORT} 用户@VPS地址')
+            print('按 Ctrl+C 关闭后台，闲置 15 分钟自动关闭。')
+            while (remaining := IDLE - (time.monotonic() - server.last_used)) > 0:
+                server.timeout = remaining
+                server.handle_request()
+    except KeyboardInterrupt:
+        print('\n网页后台已关闭。')
+    except OSError as exc:
+        raise Error('无法启动网页后台。请检查 18765 端口是否已被使用。') from exc

@@ -16,7 +16,7 @@ TCP 使用 Shadowsocks 2022，TUIC 使用 QUIC/TLS。两种入口共用公网端
 以 root 登录，普通用户先 `sudo -i`，再复制一整行：
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.5.4/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/youqishi1/socks5-relay-manager/v1.6.0/start.sh -o /root/socks-relay-setup.sh && bash /root/socks-relay-setup.sh
 ```
 
 固定版本安装包先校验 SHA-256，再执行安装。交互终端安装后自动打开菜单，以后 root 输入 `sb1`，普通用户输入 `sudo sb1`。原命令 `socks-menu` 继续可用。若 `/usr/local/bin/sb1` 已被其他程序占用，安装器拒绝覆盖。没有 curl 时先安装 `curl ca-certificates`。下载源码后在源码目录执行 `bash install.sh --local`。
@@ -81,9 +81,18 @@ socks5://账号:密码@IP:端口
 
 配置成功后，端口及 SS/TUIC 账密保留，所有现有双模式入口改用域名 SNI，新添加的入口也自动使用该证书。菜单 **16/18** 获取更新后的 `TUIC-普通链接.txt`，把普通 `tuic://` 链接加入 MiSub；客户端使用系统 CA 验证，无需单独安装自签证书。节点仍可使用 VPS IP 连接，SNI 使用配置的域名；支持 TUIC v5 的客户端必须保留 SNI/ALPN。不要在 MiSub 开启跳过证书验证。已有订阅需更新一次。
 
-**小火箭扫码（v1.3.3）**：运行 `sb1` → **23**，单节点直接显示，多节点选择对应中转。使用普通 `tuic://` 生成紧凑二维码，手机在小火箭打开扫码功能，对准终端即可导入，扫码后按回车返回菜单；二维码备注与普通链接使用相同的出口名称，UUID、密码、地址、端口、SNI、ALPN、BBR 和证书验证设置保留。二维码及 PNG 均在 VPS 本地生成，不上传第三方二维码网站，也不新增常驻服务或图像依赖。
+**私有网页后台 / 小火箭扫码**：在电脑的 PowerShell 或终端建立 SSH 隧道并打开后台：
 
-PNG 保存到 `/etc/socks5-relay-manager/exports/dual/TUIC-20001-二维码.png`（对应中转编号、仅 root 可读）。二维码保留完整白边，终端用半块字符压缩高度；窗口太窄/太矮时提示最大化或调小字体，避免换行破坏二维码，也可通过 SFTP 下载 PNG。自签模式先使用菜单 **22** 配置公共 CA 域名证书，再扫码；不会为方便扫码关闭证书验证。二维码包含节点凭据，请只交给自己的客户端。小火箭实际导入由手机端完成。
+```bash
+ssh -t -o ExitOnForwardFailure=yes -L 127.0.0.1:18765:127.0.0.1:18765 root@你的VPS地址 sb1 web
+```
+
+若 SSH 使用其他端口，增加 `-p 你的SSH端口`。普通 SSH 用户把结尾的 `sb1 web` 换成 `sudo sb1 web`。首次启动会在 VPS 终端提示设置自己的后台密码，至少 12 字符。保持这个 SSH 窗口打开，再打开 [私有后台](http://127.0.0.1:18765/) 并登录。之后需要换密码时，在 VPS 执行 `sb1 web-password`。
+
+- 中转列表可搜索、查看、添加或修改；详情页可复制连接链接。列表和详情只读已保存的出口数据，按需在详情点击「检测出口」。
+- 有公共 CA 证书且启用 TUIC 的节点可点击「二维码」。也可在已有 SSH 隧道的 VPS 终端用菜单 **23** 直接打开该节点的页面。二维码在登录后本地生成，可以用手机小火箭扫描电脑页面。已有证书和连接信息继续使用。
+- 后台只监听 VPS 的 `127.0.0.1:18765`，不用放行公网端口。关闭 SSH 会话或按 Ctrl+C 即可退出，闲置 15 分钟自动关闭。连续输错 5 次暂停登录 5 分钟。后台和二维码都无需外部前端依赖。
+- 网页保存与终端菜单共用节点配置。需要重新生成整套本地 YAML/JSON 文件时，用菜单 **18** 导出。
 
 证书工具使用固定官方 lego 5.5.2，下载验证 SHA-256，保存在本项目 `/opt/socks5-relay-manager/acme`，不安装全局软件、不覆盖其他网站证书。证书先验证完整链、私钥、域名和有效期，再通过配置事务应用；申请失败保留现有节点。`socks-relay-cert.timer` 每天检查，证书实际变化时才重启对应实例并重新导出；证书/账号文件为 root 私有。更换域名重新运行菜单 22。若未配置域名，继续保留原来的自签证书模式。小火箭的原生 iOS 界面需要用户最终导入验证，CI 验证普通链接及实际 TUIC 核心链路。
 
@@ -109,8 +118,10 @@ PNG 保存到 `/etc/socks5-relay-manager/exports/dual/TUIC-20001-二维码.png`�
 | 19 | 旧中转启用双模式 |
 | 20 | 设置公网地址 |
 | 22 | 输入域名，自动识别网站目录、申请证书及续期，供 MiSub 普通 TUIC 分发 |
-| 23 | 显示紧凑 TUIC 手机二维码，保存私有 PNG，供小火箭扫码 |
+| 23 | 在私有后台打开指定节点的 TUIC 二维码 |
 | 25 | 按节点关闭 SS、选择仅 TUIC 或 Hysteria 2，或恢复原兼容模式 |
+| 26 | 按节点切换共享或独立 sing-box |
+| 27 | 启动私有网页后台，关闭后回到终端菜单 |
 
 指定中转编号是内部 20001 等端口。修改上游保留入口凭据，密码留空保留旧值。增删改仅重启对应实例，其他出口继续运行。
 

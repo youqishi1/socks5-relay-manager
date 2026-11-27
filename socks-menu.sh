@@ -6,4 +6,10 @@ if (( EUID != 0 )); then
 fi
 python=/opt/socks5-relay-manager/python3
 [[ -x $python ]] || python=/usr/bin/python3
-exec "$python" /opt/socks5-relay-manager/current/scripts/manager.py menu
+case "${1:-menu}:$#" in
+    menu:0) command=menu ;;
+    web:1) command=web ;;
+    web-password:1) command=web-password ;;
+    *) echo '用法：sb1、sb1 web 或 sb1 web-password。' >&2; exit 1 ;;
+esac
+exec "$python" /opt/socks5-relay-manager/current/scripts/manager.py "$command"

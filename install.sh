@@ -266,9 +266,10 @@ for name in ('install.sh', 'socks-menu.sh', 'uninstall.sh', 'VERSION', 'scripts/
         sys.exit('错误：管理程序源码不完整或含有不安全链接。')
 for script in (p / 'scripts').glob('*.py'):
     py_compile.compile(str(script), doraise=True)
-for name in ('scripts/shared_access.py', 'scripts/exit_location.py', 'systemd/socks-access-shared.service'):
+for name in ('scripts/shared_access.py', 'scripts/exit_location.py', 'systemd/socks-access-shared.service',
+             'scripts/web_admin.py', 'scripts/web_views.py', 'web/style.css', 'web/app.js', 'web/icon.png'):
     if not (p / name).is_file() or (p / name).is_symlink():
-        sys.exit('错误：共享入口或出口命名文件不完整，或含有不安全链接。')
+        sys.exit('错误：共享入口、出口命名或网页后台文件不完整，或含有不安全链接。')
 PY
 bash -n "$stage/source/install.sh" "$stage/source/socks-menu.sh" "$stage/source/uninstall.sh"
 if [[ -L $APP/current ]]; then

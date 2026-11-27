@@ -1,0 +1,454 @@
+{
+  "title": "SOCKS5 中转管理",
+  "brief": "使用临时私有后台查看、添加、修改现有中转并扫码。无需常驻 Web 服务、前端构建或外部资源。",
+  "frame": "phone",
+  "platform": "web",
+  "paletteKey": "teal",
+  "theme": {
+    "dark": false,
+    "bothModes": false,
+    "contrast": "high",
+    "shape": "rounded",
+    "font": "system",
+    "emphasized": false,
+    "motion": "standard"
+  },
+  "frames": [
+    {
+      "id": "list",
+      "name": "中转列表",
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 800,
+      "note": "桌面居中 1120px 内容区。近白灰底、水墨蓝文字、深青色交互，窄屏将表格行折为便于扫读的卡片。使用系统中文字体，无外链字体、图片库或轮询。"
+    },
+    {
+      "id": "login",
+      "name": "后台登录",
+      "x": 1360,
+      "y": 0,
+      "w": 1280,
+      "h": 800,
+      "place": "center",
+      "note": "居中窄表单。密码只在 VPS 终端设置；错误就地提示，暂时锁定时提示剩余时间。"
+    },
+    {
+      "id": "edit",
+      "name": "添加或修改中转",
+      "x": 2720,
+      "y": 0,
+      "w": 1280,
+      "h": 800,
+      "note": "居中表单卡片，新增或替换整条 SOCKS5，选择共享或独立。保存时执行一次实际链路校验，失败保留原配置。"
+    },
+    {
+      "id": "detail",
+      "name": "中转详情",
+      "x": 4080,
+      "y": 0,
+      "w": 1280,
+      "h": 800,
+      "note": "显示端口、上游、连接方式和已缓存的实际出口。链接仅登录后显示。手动检测出口来源并更新当前节点的名称。"
+    },
+    {
+      "id": "qr",
+      "name": "浏览器二维码",
+      "x": 5440,
+      "y": 0,
+      "w": 1280,
+      "h": 800,
+      "note": "浅色面板内展示本地生成的白底二维码，保留留白，附节点名和返回入口。移动端宽度自适应。"
+    }
+  ],
+  "groups": [
+    {
+      "id": "g-top-list",
+      "x": 0,
+      "y": 0,
+      "axis": "x",
+      "items": [
+        {
+          "id": "top-list-0",
+          "variant": "filled",
+          "icon": "lan",
+          "kind": "topAppBar",
+          "label": "SOCKS5 中转管理"
+        }
+      ]
+    },
+    {
+      "id": "g-top-login",
+      "x": 1360,
+      "y": 0,
+      "axis": "x",
+      "items": [
+        {
+          "id": "top-login-0",
+          "variant": "filled",
+          "icon": "lan",
+          "kind": "topAppBar",
+          "label": "SOCKS5 中转管理"
+        }
+      ]
+    },
+    {
+      "id": "g-top-edit",
+      "x": 2720,
+      "y": 0,
+      "axis": "x",
+      "items": [
+        {
+          "id": "top-edit-0",
+          "variant": "filled",
+          "icon": "lan",
+          "kind": "topAppBar",
+          "label": "SOCKS5 中转管理"
+        }
+      ]
+    },
+    {
+      "id": "g-top-detail",
+      "x": 4080,
+      "y": 0,
+      "axis": "x",
+      "items": [
+        {
+          "id": "top-detail-0",
+          "variant": "filled",
+          "icon": "lan",
+          "kind": "topAppBar",
+          "label": "SOCKS5 中转管理"
+        }
+      ]
+    },
+    {
+      "id": "g-top-qr",
+      "x": 5440,
+      "y": 0,
+      "axis": "x",
+      "items": [
+        {
+          "id": "top-qr-0",
+          "variant": "filled",
+          "icon": "lan",
+          "kind": "topAppBar",
+          "label": "SOCKS5 中转管理"
+        }
+      ]
+    },
+    {
+      "id": "g-title",
+      "x": 80,
+      "y": 109,
+      "axis": "x",
+      "items": [
+        {
+          "id": "title-0",
+          "variant": "filled",
+          "icon": null,
+          "kind": "text",
+          "label": "中转列表",
+          "bold": true
+        }
+      ]
+    },
+    {
+      "id": "g-add",
+      "x": 1030,
+      "y": 100,
+      "axis": "x",
+      "items": [
+        {
+          "id": "add-0",
+          "variant": "filled",
+          "icon": "add",
+          "kind": "button",
+          "label": "添加中转",
+          "action": {
+            "to": "edit",
+            "transition": "none"
+          }
+        }
+      ]
+    },
+    {
+      "id": "g-find",
+      "x": 80,
+      "y": 170,
+      "axis": "x",
+      "items": [
+        {
+          "id": "find-0",
+          "variant": "filled",
+          "icon": null,
+          "kind": "searchBar",
+          "label": "搜索中转编号、地址或地区"
+        }
+      ]
+    },
+    {
+      "id": "g-rows",
+      "x": 80,
+      "y": 244,
+      "axis": "y",
+      "items": [
+        {
+          "id": "rows-0",
+          "variant": "filled",
+          "icon": null,
+          "kind": "listItem",
+          "label": "20001 · 加密入口 30001",
+          "supporting": "美国 · 8.8.8.8 · 共享 · 已启用",
+          "size": 1120,
+          "action": {
+            "to": "detail",
+            "transition": "none"
+          }
+        },
+        {
+          "id": "rows-1",
+          "variant": "filled",
+          "icon": null,
+          "kind": "listItem",
+          "label": "20002 · 加密入口 30002",
+          "supporting": "日本 · 上游地址 · 独立 · 已启用",
+          "size": 1120,
+          "action": {
+            "to": "detail",
+            "transition": "none"
+          }
+        }
+      ]
+    },
+    {
+      "id": "g-password",
+      "x": 1770,
+      "y": 274,
+      "axis": "x",
+      "items": [
+        {
+          "id": "password-0",
+          "variant": "outlined",
+          "icon": null,
+          "kind": "textField",
+          "label": "后台密码",
+          "supporting": "使用你在 VPS 终端设置的密码",
+          "size": 460
+        }
+      ]
+    },
+    {
+      "id": "g-signin",
+      "x": 1770,
+      "y": 352,
+      "axis": "x",
+      "items": [
+        {
+          "id": "signin-0",
+          "variant": "filled",
+          "icon": null,
+          "kind": "button",
+          "label": "登录",
+          "action": {
+            "to": "list",
+            "transition": "none"
+          },
+          "size": 460
+        }
+      ]
+    },
+    {
+      "id": "g-back-edit",
+      "x": 3010,
+      "y": 116,
+      "axis": "x",
+      "items": [
+        {
+          "id": "back-edit-0",
+          "variant": "outlined",
+          "icon": null,
+          "kind": "button",
+          "label": "返回中转列表",
+          "action": {
+            "to": "list",
+            "transition": "none"
+          }
+        }
+      ]
+    },
+    {
+      "id": "g-paste",
+      "x": 3010,
+      "y": 190,
+      "axis": "x",
+      "items": [
+        {
+          "id": "paste-0",
+          "variant": "outlined",
+          "icon": null,
+          "kind": "textField",
+          "label": "完整 SOCKS5",
+          "supporting": "IP:端口:账号:密码 或 socks5://链接",
+          "size": 700
+        }
+      ]
+    },
+    {
+      "id": "g-topology",
+      "x": 3010,
+      "y": 274,
+      "axis": "x",
+      "items": [
+        {
+          "id": "topology-0",
+          "variant": "filled",
+          "icon": null,
+          "kind": "select",
+          "label": "运行方式",
+          "tabs": [
+            {
+              "label": "共享 sing-box"
+            },
+            {
+              "label": "独立 sing-box"
+            }
+          ],
+          "selected": 0,
+          "size": 700
+        }
+      ]
+    },
+    {
+      "id": "g-save",
+      "x": 3010,
+      "y": 370,
+      "axis": "x",
+      "items": [
+        {
+          "id": "save-0",
+          "variant": "filled",
+          "icon": null,
+          "kind": "button",
+          "label": "保存中转",
+          "action": {
+            "to": "list",
+            "transition": "none"
+          },
+          "size": 200
+        }
+      ]
+    },
+    {
+      "id": "g-detail-actions",
+      "x": 4160,
+      "y": 116,
+      "axis": "x",
+      "items": [
+        {
+          "id": "detail-actions-0",
+          "variant": "outlined",
+          "icon": null,
+          "kind": "button",
+          "label": "返回列表",
+          "action": {
+            "to": "list",
+            "transition": "none"
+          }
+        },
+        {
+          "id": "detail-actions-1",
+          "variant": "outlined",
+          "icon": null,
+          "kind": "button",
+          "label": "修改",
+          "action": {
+            "to": "edit",
+            "transition": "none"
+          }
+        },
+        {
+          "id": "detail-actions-2",
+          "variant": "outlined",
+          "icon": null,
+          "kind": "button",
+          "label": "查看 TUIC 二维码",
+          "action": {
+            "to": "qr",
+            "transition": "none"
+          }
+        }
+      ]
+    },
+    {
+      "id": "g-detail-data",
+      "x": 4160,
+      "y": 200,
+      "axis": "x",
+      "items": [
+        {
+          "id": "detail-data-0",
+          "variant": "outlined",
+          "icon": null,
+          "kind": "card",
+          "label": "中转 20001",
+          "supporting": "入口 30001 · 共享 sing-box\\n实测出口及地区\\nSS 与 TUIC 链接",
+          "noImage": true,
+          "size": 760,
+          "size2": 360
+        }
+      ]
+    },
+    {
+      "id": "g-qr-back",
+      "x": 5850,
+      "y": 110,
+      "axis": "x",
+      "items": [
+        {
+          "id": "qr-back-0",
+          "variant": "outlined",
+          "icon": null,
+          "kind": "button",
+          "label": "返回中转详情",
+          "action": {
+            "to": "detail",
+            "transition": "none"
+          }
+        }
+      ]
+    },
+    {
+      "id": "g-qr-name",
+      "x": 5850,
+      "y": 190,
+      "axis": "x",
+      "items": [
+        {
+          "id": "qr-name-0",
+          "variant": "filled",
+          "icon": null,
+          "kind": "text",
+          "label": "TUIC 二维码",
+          "bold": true
+        }
+      ]
+    },
+    {
+      "id": "g-qr-image",
+      "x": 5900,
+      "y": 250,
+      "axis": "x",
+      "items": [
+        {
+          "id": "qr-image-0",
+          "variant": "filled",
+          "icon": null,
+          "kind": "image",
+          "label": "TUIC 二维码",
+          "size": 280
+        }
+      ]
+    }
+  ]
+}

@@ -454,7 +454,7 @@ class Manager:
         address = '127.0.0.1' if row['bind'] == '0.0.0.0' else row['bind']
         return health(address, row['port'], row['client_user'], row['client_password'], self.ip_url)
 
-    def exit_locations(self, rows, refresh=False):
+    def exit_locations(self, rows, refresh=False, cached_only=False):
         from concurrent.futures import ThreadPoolExecutor
         from exit_location import country_for
 
@@ -468,10 +468,12 @@ class Manager:
                 try:
                     cached = read_json(path)
                     age = time.time() - cached['checked']
-                    if 0 <= age < (86400 if cached['country'] else 300):
+                    if cached_only or 0 <= age < (86400 if cached['country'] else 300):
                         return port, (cached['ip'], cached['country'])
                 except (Error, KeyError, TypeError, OSError):
                     pass
+            if cached_only:
+                return port, ('', '')
             try:
                 ip, _ = self.verify(row)
             except (Error, OSError):
@@ -485,6 +487,8 @@ class Manager:
 
         if not candidates:
             return {}
+        if cached_only:
+            return dict(map(detect, candidates))
         with ThreadPoolExecutor(max_workers=min(4, len(candidates))) as pool:
             return dict(pool.map(detect, candidates))
 
@@ -752,9 +756,9 @@ def parse_upstream(value):
         raise Error('整条 SOCKS5 格式无效。使用 IP:端口:账号:密码，或 socks5://账号:密码@IP:端口；IPv6 用 [地址]:端口:账号:密码。') from None
 
 
-def pasted_row(manager, previous=None):
+def upstream_row(manager, line, previous=None):
     old = previous or {}
-    row = parse_upstream(getpass.getpass('粘贴整条 SOCKS5 信息（隐藏输入，密码中的冒号保留）：'))
+    row = parse_upstream(line)
     port = old.get('port') or manager.allocate()
     row.update(port=port, client_user=old.get('client_user', 'client' + str(port - FIRST + 1).zfill(2)),
                client_password=old.get('client_password', secrets.token_urlsafe(24)),
@@ -764,6 +768,11 @@ def pasted_row(manager, previous=None):
     if old.get('shared'):
         row['shared'] = True
     validate(row)
+    return row
+
+
+def pasted_row(manager, previous=None):
+    row = upstream_row(manager, getpass.getpass('粘贴整条 SOCKS5 信息（隐藏输入，密码中的冒号保留）：'), previous)
     print('正在检测上游代理...')
     row['resolved_ip'] = resolve(row['upstream_host'])
     exit_ip, duration = health(row['resolved_ip'], row['upstream_port'], row['upstream_user'], row['upstream_password'], manager.ip_url)
@@ -837,11 +846,15 @@ def vps_address(row):
     return None
 
 
-def public_address(manager):
+def public_address(manager, detect=True):
     path = manager.root / 'public-address.json'
     if path.exists():
         return host(read_json(path)['address'])
     address = vps_address({'bind': '0.0.0.0'})
+    if not detect:
+        if not address:
+            raise Error('请先在 VPS 的 sb1 菜单 20 设置公网 IP 或域名。')
+        return address
     if not address:
         # NAT hosts need an address discovery request. No credentials are sent.
         env = {k: v for k, v in os.environ.items() if k.lower() not in {'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy'}}
@@ -910,8 +923,20 @@ def export_dual(manager, refresh=False):
     return directory
 
 
-def enable_dual(manager, row=None):
+def add_access(manager, row, shared):
     from access import AccessError, generate
+    from certificates import for_new
+    if not manager.access_binary.is_file():
+        raise Error('双模式核心尚未安装，请先运行新版一键安装命令。')
+    try:
+        row['access'] = for_new(manager, generate(manager.rows(), row['port']))
+    except AccessError as exc:
+        raise Error(str(exc)) from None
+    if shared:
+        row['shared'] = True
+
+
+def enable_dual(manager, row=None):
     if not manager.access_binary.is_file():
         raise Error('双模式核心尚未安装，请先运行新版一键安装命令。')
     if row and row.get('access') and row['enabled']:
@@ -932,14 +957,7 @@ def enable_dual(manager, row=None):
     row['bind'], row['sources'] = '127.0.0.1', ['127.0.0.1']
     row['enabled'] = True
     if mode is not None:
-        try:
-            row['access'] = generate(manager.rows(), row['port'])
-            from certificates import for_new
-            row['access'] = for_new(manager, row['access'])
-        except AccessError as exc:
-            raise Error(str(exc)) from None
-        if mode == '1':
-            row['shared'] = True
+        add_access(manager, row, mode == '1')
     elif row.get('shared'):
         print('重新启用会重启共享入口，组内连接可能短暂断开。')
     manager.apply({row['port']: row})
@@ -1001,35 +1019,18 @@ def show_all_connections(manager):
 
 
 def show_tuic_qr(manager):
-    from access import AccessError
-    from tuic_qr import build, png, terminal, BORDER
+    from access import system_trust
     rows = [row for row in manager.rows() if row['enabled'] and row.get('access')]
     if not rows:
         raise Error('暂无启用的双模式节点，请先添加节点。')
     row = rows[0] if len(rows) == 1 else select_row(manager)
     if not row['enabled'] or not row.get('access'):
         raise Error('请选择已启用的双模式节点。')
-    try:
-        _, code = build(row, public_address(manager), manager.exit_locations([row]))
-    except AccessError as exc:
-        raise Error(str(exc)) from None
-    path = manager.root / 'exports' / 'dual' / ('TUIC-' + str(row['port']) + '-二维码.png')
-    atomic(path, png(code))
-    print('\nTUIC 手机扫码 / 中转 ' + str(row['port']) + ' / 证书验证开启')
-    rendered = terminal(code)
-    columns, height = shutil.get_terminal_size((80, 40))
-    try:
-        rendered.encode(sys.stdout.encoding or 'utf-8')
-        supported = True
-    except UnicodeEncodeError:
-        supported = False
-    if supported and code.get_size() + BORDER * 2 <= columns and len(rendered.splitlines()) + 7 <= height:
-        print(rendered)
-        print('小火箭 → 扫码 → 对准上方二维码，确认导入 TUIC 节点。')
-    else:
-        print('终端窗口较小或字体不支持，请最大化/调小字体后再选 23；也可通过 SFTP 下载下方 PNG 扫码。')
-    print('二维码图片：' + str(path) + '（仅 root 可读）')
-    print('二维码含节点凭据，请只分享给自己的客户端。')
+    if row['access'].get('profile') == 'hysteria2-only':
+        raise Error('此节点未启用 TUIC，请用菜单 16 或后台详情查看 HY2 链接。')
+    if not system_trust(row['access']):
+        raise Error('手机扫码请先用菜单 22 配置公共 CA 域名证书。')
+    return '/nodes/' + str(row['port']) + '/qr'
 
 
 def export_tuic(manager):
@@ -1187,7 +1188,7 @@ def menu(manager):
             state = '运行中' if enabled and running == len(enabled) else ('部分运行/异常' if running else '未运行/暂无启用代理')
             print('\n========================================\n        SOCKS5 中转管理系统\n========================================')
             print('系统状态：' + state + '\n代理数量：' + str(len(rows)) + '\n端口范围：20001-29999')
-            print('1. 一键添加加密 TCP + TUIC（粘贴整条 SOCKS5）\n2. 查看全部中转\n3. 删除 SOCKS5 中转\n4. 修改 SOCKS5 中转\n5. 检测所有代理出口 IP\n6. 检测指定代理\n7. 重启代理服务\n8. 查看运行状态\n9. 查看日志\n10. 备份配置\n11. 恢复配置\n12. 更新程序\n13. 卸载程序\n14. 高级：复用现有 TUIC 导出配置\n15. 高级：手动添加本机中转\n16. 查看全部连接信息和账密\n17. 高级：粘贴整条信息添加本机中转\n18. 重新导出双模式客户端文件\n19. 给已有中转启用加密 TCP + TUIC\n20. 设置 VPS 公网 IP/域名\n21. 高级：添加原生 SOCKS5 中转\n22. 配置域名证书（MiSub / 小火箭 / v2rayN 分发）\n23. 显示 TUIC 手机扫码二维码\n24. 一键诊断连接（已启用入口 / 上游 / 证书）\n25. 调整公网入口（关闭 SS / TUIC / Hysteria 2）\n26. 按端口选择共享或独立 sing-box\n0. 退出')
+            print('1. 一键添加加密 TCP + TUIC（粘贴整条 SOCKS5）\n2. 查看全部中转\n3. 删除 SOCKS5 中转\n4. 修改 SOCKS5 中转\n5. 检测所有代理出口 IP\n6. 检测指定代理\n7. 重启代理服务\n8. 查看运行状态\n9. 查看日志\n10. 备份配置\n11. 恢复配置\n12. 更新程序\n13. 卸载程序\n14. 高级：复用现有 TUIC 导出配置\n15. 高级：手动添加本机中转\n16. 查看全部连接信息和账密\n17. 高级：粘贴整条信息添加本机中转\n18. 重新导出双模式客户端文件\n19. 给已有中转启用加密 TCP + TUIC\n20. 设置 VPS 公网 IP/域名\n21. 高级：添加原生 SOCKS5 中转\n22. 配置域名证书（MiSub / 小火箭 / v2rayN 分发）\n23. 在浏览器打开 TUIC 二维码\n24. 一键诊断连接（已启用入口 / 上游 / 证书）\n25. 调整公网入口（关闭 SS / TUIC / Hysteria 2）\n26. 按端口选择共享或独立 sing-box\n27. 打开私有网页管理后台\n0. 退出')
             option = ask('请输入选项')
             if option == '0':
                 return
@@ -1210,12 +1211,11 @@ def menu(manager):
             if option == '13':
                 uninstall(manager)
                 return
-            if option == '23':
+            if option in ('23', '27'):
+                from web_admin import serve
                 with manager.lock():
-                    show_tuic_qr(manager)
-                # Waiting for the phone must not block certificate renewal or
-                # another SSH session's management operations.
-                ask('扫码完成后按回车返回菜单', '')
+                    path = show_tuic_qr(manager) if option == '23' else '/'
+                serve(manager, path)
                 continue
             with manager.lock():
                 if option == '1':
@@ -1324,7 +1324,7 @@ def menu(manager):
                 elif option == '26':
                     configure_topology(manager)
                 else:
-                    print('无效选项，请输入 0–26。')
+                    print('无效选项，请输入 0–27。')
         except Error as exc:
             print('错误：' + str(exc))
             if (manager.root / 'pending.json').exists():
@@ -1355,6 +1355,12 @@ def main():
     manager = Manager(readonly=bool(log_name))
     if args == ['menu']:
         menu(manager)
+    elif args == ['web']:
+        from web_admin import serve
+        serve(manager)
+    elif args == ['web-password']:
+        from web_admin import set_password
+        set_password(manager)
     elif args == ['uninstall']:
         uninstall(manager)
     elif len(args) == 2 and args[0] == 'run' and args[1].isdecimal() and FIRST <= int(args[1]) <= LAST:
@@ -1383,6 +1389,7 @@ def main():
 
 
 if __name__ == '__main__':
+    sys.modules['manager'] = sys.modules[__name__]
     try:
         main()
     except Error as error:

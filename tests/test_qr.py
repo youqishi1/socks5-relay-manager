@@ -2,7 +2,6 @@
 import contextlib
 import copy
 import io
-import os
 from pathlib import Path
 import re
 import shutil
@@ -98,12 +97,10 @@ class QRTests(unittest.TestCase):
         with self.assertRaises(access.AccessError):
             tuic_qr.build(self.row(), 'https://invalid.example/')
 
-    def test_menu_displays_one_qr_and_saves_private_png_without_restart(self):
+    def test_menu_opens_browser_qr_after_releasing_management_lock(self):
         with tempfile.TemporaryDirectory() as directory:
             instance = Mock(root=Path(directory))
             instance.rows.return_value = [self.row()]
-            locations = {20001: ('8.8.8.8', '美国')}
-            instance.exit_locations.return_value = locations
             instance.backend.active.return_value = True
             held = [False]
 
@@ -116,44 +113,19 @@ class QRTests(unittest.TestCase):
                     held[0] = False
 
             instance.lock.side_effect = lock
-            answers = iter(['23', '', '0'])
-
-            def answer(prompt):
-                if '扫码完成后' in prompt:
-                    self.assertFalse(held[0], '等待手机扫码不能占用管理锁')
-                return next(answers)
+            def serve(supplied, path):
+                self.assertIs(supplied, instance)
+                self.assertEqual(path, '/nodes/20001/qr')
+                self.assertFalse(held[0])
 
             output = io.StringIO()
-            with patch.object(manager, 'public_address', return_value='203.0.113.1'), \
-                 patch.object(manager.shutil, 'get_terminal_size', return_value=(100, 60)), \
+            with patch('web_admin.serve', side_effect=serve) as server, \
                  patch.object(manager, 'select_row', side_effect=AssertionError('单节点不应要求选择')), \
-                 patch('builtins.input', side_effect=answer), contextlib.redirect_stdout(output):
+                 patch('builtins.input', side_effect=['23', '0']), contextlib.redirect_stdout(output):
                 manager.menu(instance)
-            path = instance.root / 'exports' / 'dual' / 'TUIC-20001-二维码.png'
-            self.assertTrue(path.is_file())
-            self.assertIn('小火箭 → 扫码', output.getvalue())
-            link = self.decode(cv2.imdecode(np.frombuffer(path.read_bytes(), dtype=np.uint8), cv2.IMREAD_GRAYSCALE))
-            self.assertEqual(link, access.configs([self.row()], '203.0.113.1', locations)['TUIC-普通链接.txt'].strip())
-            self.assertEqual(unquote(urlsplit(link).fragment), '美国-8.8.8.8-20001-TUIC')
-            instance.apply.assert_not_called()
-            instance.backend.apply.assert_not_called()
-            if os.name == 'posix':
-                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
-
-    def test_narrow_terminal_preserves_png_without_wrapping_qr(self):
-        with tempfile.TemporaryDirectory() as directory:
-            instance = Mock(root=Path(directory))
-            instance.rows.return_value = [self.row()]
-            instance.exit_locations.return_value = {}
-            output = io.StringIO()
-            with patch.object(manager, 'public_address', return_value='203.0.113.1'), \
-                 patch.object(manager.shutil, 'get_terminal_size', return_value=(40, 24)), \
-                 patch('builtins.input', return_value=''), contextlib.redirect_stdout(output):
-                manager.show_tuic_qr(instance)
-            self.assertIn('最大化', output.getvalue())
+            server.assert_called_once()
             self.assertNotIn('\x1b[30;107m', output.getvalue())
-            path = instance.root / 'exports' / 'dual' / 'TUIC-20001-二维码.png'
-            self.assertEqual(self.decode(cv2.imdecode(np.frombuffer(path.read_bytes(), dtype=np.uint8), cv2.IMREAD_GRAYSCALE)), tuic_qr.build(self.row(), '203.0.113.1')[0])
+            instance.apply.assert_not_called()
 
     def test_existing_qr_is_refreshed_when_credentials_and_sni_change(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -161,12 +133,12 @@ class QRTests(unittest.TestCase):
             row = self.row()
             instance.rows.return_value = [row]
             instance.exit_locations.return_value = {}
-            with patch.object(manager, 'public_address', return_value='203.0.113.1'), \
-                 patch.object(manager.shutil, 'get_terminal_size', return_value=(40, 24)), \
-                 patch('builtins.input', return_value=''), contextlib.redirect_stdout(io.StringIO()):
-                manager.show_tuic_qr(instance)
-                path = instance.root / 'exports' / 'dual' / 'TUIC-20001-二维码.png'
-                old = path.read_bytes()
+            path = instance.root / 'exports' / 'dual' / 'TUIC-20001-二维码.png'
+            link, code = tuic_qr.build(row, '203.0.113.1', {20001: ('8.8.8.8', '美国')})
+            old = tuic_qr.png(code)
+            self.assertEqual(self.decode(cv2.imdecode(np.frombuffer(old, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)), link)
+            manager.atomic(path, old)
+            with patch.object(manager, 'public_address', return_value='203.0.113.1'), contextlib.redirect_stdout(io.StringIO()):
                 row['access']['tuic_password'] = 'replacement-fixture-secret'
                 row['access']['server_name'] = 'updated.example.test'
                 manager.export_dual(instance)
